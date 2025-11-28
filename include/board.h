@@ -38,6 +38,6 @@ struct Move {
     int to_col;
     PieceType promotion = PieceType::None;
 };
-
+Board make_starting_position();
 #endif pwd
 
