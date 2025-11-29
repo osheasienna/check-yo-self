@@ -2,6 +2,7 @@
 #define BOARD_H
 
 #include <array>
+#include <vector>
 
 constexpr int BOARD_SIZE = 8;
 
@@ -39,5 +40,6 @@ struct Move {
     PieceType promotion = PieceType::None;
 };
 Board make_starting_position();
-#endif pwd
+std::vector<Move> generate_legal_moves(const Board& board);
+#endif
 

@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(chessbot
     src/main.cpp
+    1_construct_board.cpp
+    2_generate_legal_moves.cpp
 )
 
 target_include_directories(chessbot
