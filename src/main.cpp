@@ -13,7 +13,6 @@ namespace {
 void print_usage(const char* program_name) {
     std::cerr << "Usage: " << program_name
               << " -H <path to input history file> -m <path to output move file>\n";
-    std::cerr << "   or: " << program_name << " --test\n";
 }
 
 struct ProgramOptions {
