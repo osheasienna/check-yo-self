@@ -1,7 +1,6 @@
 #include "board.h"
 #include <vector>
 
-
 namespace {
 
 bool is_valid_square(int row, int col) {
@@ -28,10 +27,15 @@ bool is_in_check(const Board& board, Color color) {
     Color enemy_color = (color == Color::White) ? Color::Black : Color::White;
 
     // 1. Pawn attacks
-    int pawn_dir = (enemy_color == Color::White) ? 1 : -1;
+    // White pawns capture at row+1 (from their perspective), so if I am White, enemy Black pawns are at row+1.
+    // If I am Black, enemy White pawns are at row-1.
+    int pawn_dir = (enemy_color == Color::White) ? -1 : 1; 
+    // Wait: White pawns move +1. So if enemy is White, they are at king_row-1 attacking king_row.
+    // If enemy is Black (move -1), they are at king_row+1 attacking king_row.
+    
     int attack_cols[] = {king_col - 1, king_col + 1};
     for (int col : attack_cols) {
-        int row = king_row - pawn_dir; // The pawn comes from this direction
+        int row = king_row + pawn_dir; 
         if (is_valid_square(row, col)) {
             const Piece& p = board.squares[row][col];
             if (p.type == PieceType::Pawn && p.color == enemy_color) return true;
@@ -95,7 +99,7 @@ bool is_in_check(const Board& board, Color color) {
 }
 
 // Helper to add move if square is empty or has enemy piece. Returns true if square was blocked (by friend or enemy).
-bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_row, int to_col, std::vector<Move>& moves) {
+bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_row, int to_col, std::vector<move>& moves) {
     if (!is_valid_square(to_row, to_col)) {
         return true;
     }
@@ -104,17 +108,17 @@ bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_ro
     const Piece& target_piece = board.squares[to_row][to_col];
 
     if (target_piece.type == PieceType::None) {
-        moves.push_back({from_row, from_col, to_row, to_col});
+        moves.emplace_back(from_row, from_col, to_row, to_col);
         return false; // Not blocked, can continue (for sliding pieces)
     } else if (target_piece.color != source_piece.color) {
-        moves.push_back({from_row, from_col, to_row, to_col});
+        moves.emplace_back(from_row, from_col, to_row, to_col);
         return true; // Blocked by enemy piece (capture)
     }
 
     return true; // Blocked by friendly piece
 }
 
-void generate_pawn_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     const Piece& piece = board.squares[row][col];
     int direction = (piece.color == Color::White) ? 1 : -1;
     int start_row = (piece.color == Color::White) ? 1 : 6;
@@ -122,12 +126,12 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<Move>
     // Move forward 1
     int next_row = row + direction;
     if (is_valid_square(next_row, col) && board.squares[next_row][col].type == PieceType::None) {
-        moves.push_back({row, col, next_row, col});
+        moves.emplace_back(row, col, next_row, col);
 
         // Move forward 2 (only if moved forward 1)
         int two_steps_row = row + 2 * direction;
         if (row == start_row && is_valid_square(two_steps_row, col) && board.squares[two_steps_row][col].type == PieceType::None) {
-            moves.push_back({row, col, two_steps_row, col});
+            moves.emplace_back(row, col, two_steps_row, col);
         }
     }
 
@@ -137,13 +141,13 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<Move>
         if (is_valid_square(next_row, next_col)) {
             const Piece& target = board.squares[next_row][next_col];
             if (target.type != PieceType::None && target.color != piece.color) {
-                moves.push_back({row, col, next_row, next_col});
+                moves.emplace_back(row, col, next_row, next_col);
             }
         }
     }
 }
 
-void generate_knight_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_knight_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     int offsets[8][2] = {
         {2, 1}, {2, -1}, {-2, 1}, {-2, -1},
         {1, 2}, {1, -2}, {-1, 2}, {-1, -2}
@@ -154,7 +158,7 @@ void generate_knight_moves(const Board& board, int row, int col, std::vector<Mov
     }
 }
 
-void generate_sliding_moves(const Board& board, int row, int col, const int directions[][2], int num_directions, std::vector<Move>& moves) {
+void generate_sliding_moves(const Board& board, int row, int col, const int directions[][2], int num_directions, std::vector<move>& moves) {
     for (int i = 0; i < num_directions; ++i) {
         int d_row = directions[i][0];
         int d_col = directions[i][1];
@@ -168,17 +172,17 @@ void generate_sliding_moves(const Board& board, int row, int col, const int dire
     }
 }
 
-void generate_bishop_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_bishop_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     static const int directions[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
     generate_sliding_moves(board, row, col, directions, 4, moves);
 }
 
-void generate_rook_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_rook_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     static const int directions[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     generate_sliding_moves(board, row, col, directions, 4, moves);
 }
 
-void generate_queen_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_queen_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     static const int directions[8][2] = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
@@ -186,7 +190,7 @@ void generate_queen_moves(const Board& board, int row, int col, std::vector<Move
     generate_sliding_moves(board, row, col, directions, 8, moves);
 }
 
-void generate_king_moves(const Board& board, int row, int col, std::vector<Move>& moves) {
+void generate_king_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     static const int offsets[8][2] = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
@@ -199,10 +203,10 @@ void generate_king_moves(const Board& board, int row, int col, std::vector<Move>
 
 } 
 
-std::vector<Move> generate_legal_moves(const Board& board) {
-    std::vector<Move> moves;
+std::vector<move> generate_legal_moves(const Board& board) {
+    std::vector<move> moves;
     moves.reserve(50);
-    std::vector<Move> pseudo_legal_moves;
+    std::vector<move> pseudo_legal_moves;
     pseudo_legal_moves.reserve(50);
 
     for (int row = 0; row < BOARD_SIZE; ++row) {
@@ -237,14 +241,13 @@ std::vector<Move> generate_legal_moves(const Board& board) {
     }
 
     // Filter moves that leave the king in check
-    for (const auto& move : pseudo_legal_moves) {
+    for (const auto& m : pseudo_legal_moves) {
         Board temp_board = board;
-        make_move(temp_board, move);
+        make_move(temp_board, m);
         if (!is_in_check(temp_board, board.side_to_move)) {
-            moves.push_back(move);
+            moves.push_back(m);
         }
     }
 
     return moves;
 }
-

@@ -8,8 +8,8 @@
 #include <ctime>
 
 extern Board make_starting_position();
-extern std::vector<Move> generate_legal_moves(const Board& board);
-extern void make_move(Board& board, const Move& move);
+extern std::vector<move> generate_legal_moves(const Board& board);
+extern void make_move(Board& board, const move& m);
 
 namespace {
 
@@ -55,47 +55,27 @@ bool parse_arguments(int argc, char* argv[], ProgramOptions& options) {
     return true;
 }
 
-// Convert notation like "e2e4" to Move
-Move parse_move(const std::string& move_str) {
+// Convert notation like "e2e4" to move struct
+move parse_move(const std::string& move_str) {
     if (move_str.length() < 4) {
-        return {-1, -1, -1, -1};
+        return {0, 0, 0, 0}; // Invalid
     }
     int from_col = move_str[0] - 'a';
     int from_row = move_str[1] - '1';
     int to_col = move_str[2] - 'a';
     int to_row = move_str[3] - '1';
     
-    PieceType promotion = PieceType::None;
+    promotion_piece_type promotion = NONE;
     if (move_str.length() >= 5) {
         switch (move_str[4]) {
-            case 'q': promotion = PieceType::Queen; break;
-            case 'r': promotion = PieceType::Rook; break;
-            case 'b': promotion = PieceType::Bishop; break;
-            case 'n': promotion = PieceType::Knight; break;
+            case 'q': promotion = QUEEN; break;
+            case 'r': promotion = ROOK; break;
+            case 'b': promotion = BISHOP; break;
+            case 'n': promotion = KNIGHT; break;
         }
     }
     
-    return {from_row, from_col, to_row, to_col, promotion};
-}
-
-// Convert Move to notation like "e2e4"
-std::string move_to_string(const Move& move) {
-    std::string result;
-    result += static_cast<char>('a' + move.from_col);
-    result += static_cast<char>('1' + move.from_row);
-    result += static_cast<char>('a' + move.to_col);
-    result += static_cast<char>('1' + move.to_row);
-    
-    if (move.promotion != PieceType::None) {
-        switch (move.promotion) {
-            case PieceType::Queen: result += 'q'; break;
-            case PieceType::Rook: result += 'r'; break;
-            case PieceType::Bishop: result += 'b'; break;
-            case PieceType::Knight: result += 'n'; break;
-            default: break;
-        }
-    }
-    return result;
+    return move(from_row, from_col, to_row, to_col, promotion);
 }
 
 Board parse_history(const std::string& history_path) {
@@ -118,28 +98,13 @@ Board parse_history(const std::string& history_path) {
         }
 
         if (!line.empty()) {
-            Move move = parse_move(line);
+            move m = parse_move(line);
             // Replay the move
-            make_move(board, move);
+            make_move(board, m);
         }
     }
     
     return board;
-}
-
-bool write_move(const std::string& move_path, const Move& move) {
-    std::ofstream move_file(move_path, std::ios::trunc);
-    if (!move_file.is_open()) {
-        std::cerr << "Failed to open move file: " << move_path << '\n';
-        return false;
-    }
-    move_file << move_to_string(move) << '\n';
-    return true;
-}
-
-// Apply a move to the board (wrapper for make_move for compatibility with test)
-void apply_move(Board& board, const Move& move) {
-    make_move(board, move);
 }
 
 // Print board (simple ASCII representation)
@@ -166,17 +131,15 @@ void print_board(const Board& board) {
 }
 
 void run_test_mode() {
-    // starting position
     Board board = make_starting_position();
     
     std::cout << "=== Starting Position ===\n";
     print_board(board);
     
-    // Generate and display legal moves
-    std::vector<Move> moves = generate_legal_moves(board);
+    std::vector<move> moves = generate_legal_moves(board);
     std::cout << "Legal moves for White: " << moves.size() << "\n";
     for (size_t i = 0; i < moves.size(); ++i) {
-        std::cout << move_to_string(moves[i]);
+        std::cout << move_to_uci(moves[i]);
         if ((i + 1) % 10 == 0) {
             std::cout << "\n";
         } else {
@@ -184,57 +147,9 @@ void run_test_mode() {
         }
     }
     std::cout << "\n\n";
-    
-    // Test: Apply a few moves
-    std::cout << "=== Testing with moves: e2e4, e7e5, g1f3 ===\n";
-    
-    // Move 1: e2e4 (White)
-    Move move1 = parse_move("e2e4");
-    apply_move(board, move1);
-    print_board(board);
-    
-    moves = generate_legal_moves(board);
-    std::cout << "Legal moves for Black: " << moves.size() << "\n";
-    for (size_t i = 0; i < moves.size() && i < 20; ++i) {
-        std::cout << move_to_string(moves[i]) << " ";
-    }
-    if (moves.size() > 20) {
-        std::cout << "... (showing first 20)";
-    }
-    std::cout << "\n\n";
-    
-    // Move 2: e7e5 (Black)
-    Move move2 = parse_move("e7e5");
-    apply_move(board, move2);
-    print_board(board);
-    
-    moves = generate_legal_moves(board);
-    std::cout << "Legal moves for White: " << moves.size() << "\n";
-    for (size_t i = 0; i < moves.size() && i < 20; ++i) {
-        std::cout << move_to_string(moves[i]) << " ";
-    }
-    if (moves.size() > 20) {
-        std::cout << "... (showing first 20)";
-    }
-    std::cout << "\n\n";
-    
-    // Move 3: g1f3 (White)
-    Move move3 = parse_move("g1f3");
-    apply_move(board, move3);
-    print_board(board);
-    
-    moves = generate_legal_moves(board);
-    std::cout << "Legal moves for Black: " << moves.size() << "\n";
-    for (size_t i = 0; i < moves.size() && i < 20; ++i) {
-        std::cout << move_to_string(moves[i]) << " ";
-    }
-    if (moves.size() > 20) {
-        std::cout << "... (showing first 20)";
-    }
-    std::cout << "\n\n";
 }
 
-} 
+} // namespace
 
 int main(int argc, char* argv[]) {
     // Initialize random seed
@@ -252,9 +167,10 @@ int main(int argc, char* argv[]) {
 
     std::cout << "chess-king running...\n";
     
+    // 1. Parse history and reconstruct board state
     Board board = parse_history(options.history_path);
 
-
+    // Debug: Print board state to stderr
     std::cerr << "=== Debug: Board State after history ===\n";
     std::cerr << "  a b c d e f g h\n";
     for (int row = 7; row >= 0; --row) {
@@ -276,21 +192,23 @@ int main(int argc, char* argv[]) {
     std::cerr << "\nSide to move: " 
               << (board.side_to_move == Color::White ? "White" : "Black") << "\n\n";
     
-
-    std::vector<Move> moves = generate_legal_moves(board);
+    // 2. Generate legal moves for the current side
+    std::vector<move> moves = generate_legal_moves(board);
     
     if (moves.empty()) {
         std::cerr << "No legal moves available! (Checkmate or Stalemate)\n";
-
         return 1;
     }
     
+    // 3. Pick a random legal move
     int random_index = std::rand() % moves.size();
-    Move best_move = moves[random_index];
-    if (!write_move(options.move_path, best_move)) {
+    move best_move = moves[random_index];
+
+    // 4. Write the move using move.h function
+    if (!write_move_to_file(best_move, options.move_path)) {
         return 1;
     }
 
-    std::cout << "Wrote move " << move_to_string(best_move) << " to " << options.move_path << '\n';
+    std::cout << "Wrote move " << move_to_uci(best_move) << " to " << options.move_path << '\n';
     return 0;
 }

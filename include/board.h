@@ -3,6 +3,7 @@
 
 #include <array>
 #include <vector>
+#include "move.h"
 
 constexpr int BOARD_SIZE = 8;
 
@@ -32,15 +33,8 @@ struct Board {
     Color side_to_move = Color::White;
 };
 
-struct Move {
-    int from_row;
-    int from_col;
-    int to_row;
-    int to_col;
-    PieceType promotion = PieceType::None;
-};
 Board make_starting_position();
-void make_move(Board& board, const Move& move);
-std::vector<Move> generate_legal_moves(const Board& board);
+void make_move(Board& board, const move& m);
+std::vector<move> generate_legal_moves(const Board& board);
 #endif
 

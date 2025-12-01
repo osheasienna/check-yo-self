@@ -21,7 +21,7 @@ struct move {
         : from_row(from_r), from_col(from_c), to_row(to_r), to_col(to_c), promotion(promo) {}
 };
 
-std::string move_to_uci(move m) {
+inline std::string move_to_uci(move m) {
     // Step 1: Convert column index to letter
     std::string lookup = "abcdefgh";
     char letter_from = lookup[m.from_col];
@@ -49,7 +49,7 @@ std::string move_to_uci(move m) {
     return uci;
 }
 
-bool write_move_to_file(move m, std::string path) {
+inline bool write_move_to_file(move m, std::string path) {
     // Convert move to UCI string
     std::string uci = move_to_uci(m);
 
