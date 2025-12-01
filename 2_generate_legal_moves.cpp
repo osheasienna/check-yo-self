@@ -1,10 +1,97 @@
 #include "board.h"
 #include <vector>
 
+
 namespace {
 
 bool is_valid_square(int row, int col) {
     return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+}
+
+bool is_in_check(const Board& board, Color color) {
+    // Find the king
+    int king_row = -1, king_col = -1;
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            if (board.squares[row][col].type == PieceType::King && board.squares[row][col].color == color) {
+                king_row = row;
+                king_col = col;
+                break;
+            }
+        }
+        if (king_row != -1) break;
+    }
+
+    if (king_row == -1) return false; // Should not happen
+
+    // Check for attacks from enemy pieces
+    Color enemy_color = (color == Color::White) ? Color::Black : Color::White;
+
+    // 1. Pawn attacks
+    int pawn_dir = (enemy_color == Color::White) ? 1 : -1;
+    int attack_cols[] = {king_col - 1, king_col + 1};
+    for (int col : attack_cols) {
+        int row = king_row - pawn_dir; // The pawn comes from this direction
+        if (is_valid_square(row, col)) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::Pawn && p.color == enemy_color) return true;
+        }
+    }
+
+    // 2. Knight attacks
+    int knight_offsets[8][2] = {{2, 1}, {2, -1}, {-2, 1}, {-2, -1}, {1, 2}, {1, -2}, {-1, 2}, {-1, -2}};
+    for (auto& offset : knight_offsets) {
+        int r = king_row + offset[0];
+        int c = king_col + offset[1];
+        if (is_valid_square(r, c)) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::Knight && p.color == enemy_color) return true;
+        }
+    }
+
+    // 3. Sliding pieces (Bishop, Rook, Queen)
+    // Diagonals (Bishop, Queen)
+    int diag_dirs[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+    for (auto& dir : diag_dirs) {
+        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
+            int r = king_row + dir[0] * dist;
+            int c = king_col + dir[1] * dist;
+            if (!is_valid_square(r, c)) break;
+            const Piece& p = board.squares[r][c];
+            if (p.type != PieceType::None) {
+                if (p.color == enemy_color && (p.type == PieceType::Bishop || p.type == PieceType::Queen)) return true;
+                break; // Blocked
+            }
+        }
+    }
+
+    // Straights (Rook, Queen)
+    int straight_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (auto& dir : straight_dirs) {
+        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
+            int r = king_row + dir[0] * dist;
+            int c = king_col + dir[1] * dist;
+            if (!is_valid_square(r, c)) break;
+            const Piece& p = board.squares[r][c];
+            if (p.type != PieceType::None) {
+                if (p.color == enemy_color && (p.type == PieceType::Rook || p.type == PieceType::Queen)) return true;
+                break; // Blocked
+            }
+        }
+    }
+
+    // 4. King attacks (adjacent enemy king)
+    int king_offsets[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+    for (auto& offset : king_offsets) {
+        int r = king_row + offset[0];
+        int c = king_col + offset[1];
+        if (is_valid_square(r, c)) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::King && p.color == enemy_color) return true;
+        }
+    }
+
+    return false;
 }
 
 // Helper to add move if square is empty or has enemy piece. Returns true if square was blocked (by friend or enemy).
@@ -115,6 +202,8 @@ void generate_king_moves(const Board& board, int row, int col, std::vector<Move>
 std::vector<Move> generate_legal_moves(const Board& board) {
     std::vector<Move> moves;
     moves.reserve(50);
+    std::vector<Move> pseudo_legal_moves;
+    pseudo_legal_moves.reserve(50);
 
     for (int row = 0; row < BOARD_SIZE; ++row) {
         for (int col = 0; col < BOARD_SIZE; ++col) {
@@ -122,28 +211,37 @@ std::vector<Move> generate_legal_moves(const Board& board) {
             if (piece.color == board.side_to_move) {
                 switch (piece.type) {
                     case PieceType::Pawn:
-                        generate_pawn_moves(board, row, col, moves);
+                        generate_pawn_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::Knight:
-                        generate_knight_moves(board, row, col, moves);
+                        generate_knight_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::Bishop:
-                        generate_bishop_moves(board, row, col, moves);
+                        generate_bishop_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::Rook:
-                        generate_rook_moves(board, row, col, moves);
+                        generate_rook_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::Queen:
-                        generate_queen_moves(board, row, col, moves);
+                        generate_queen_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::King:
-                        generate_king_moves(board, row, col, moves);
+                        generate_king_moves(board, row, col, pseudo_legal_moves);
                         break;
                     case PieceType::None:
                     default:
                         break;
                 }
             }
+        }
+    }
+
+    // Filter moves that leave the king in check
+    for (const auto& move : pseudo_legal_moves) {
+        Board temp_board = board;
+        make_move(temp_board, move);
+        if (!is_in_check(temp_board, board.side_to_move)) {
+            moves.push_back(move);
         }
     }
 

@@ -1,6 +1,6 @@
 # chess-king
 
-C++ Chess AI for the EP Project championship.
+C++ Chess AI
 
 ## Build
 

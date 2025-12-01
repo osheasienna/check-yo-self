@@ -40,6 +40,7 @@ struct Move {
     PieceType promotion = PieceType::None;
 };
 Board make_starting_position();
+void make_move(Board& board, const Move& move);
 std::vector<Move> generate_legal_moves(const Board& board);
 #endif
 

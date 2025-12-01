@@ -4,9 +4,12 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <cstdlib>
+#include <ctime>
 
 extern Board make_starting_position();
 extern std::vector<Move> generate_legal_moves(const Board& board);
+extern void make_move(Board& board, const Move& move);
 
 namespace {
 
@@ -52,33 +55,6 @@ bool parse_arguments(int argc, char* argv[], ProgramOptions& options) {
     return true;
 }
 
-std::string summarize_history(const std::string& history_path) {
-    std::ifstream history_file(history_path);
-    if (!history_file.is_open()) {
-        return "History file not found.";
-    }
-
-    std::size_t line_count = 0U;
-    std::string line;
-    while (std::getline(history_file, line)) {
-        if (!line.empty()) {
-            ++line_count;
-        }
-    }
-
-    return "History lines: " + std::to_string(line_count);
-}
-
-bool write_dummy_move(const std::string& move_path, const std::string& move) {
-    std::ofstream move_file(move_path, std::ios::trunc);
-    if (!move_file.is_open()) {
-        std::cerr << "Failed to open move file: " << move_path << '\n';
-        return false;
-    }
-    move_file << move << '\n';
-    return true;
-}
-
 // Convert notation like "e2e4" to Move
 Move parse_move(const std::string& move_str) {
     if (move_str.length() < 4) {
@@ -88,7 +64,18 @@ Move parse_move(const std::string& move_str) {
     int from_row = move_str[1] - '1';
     int to_col = move_str[2] - 'a';
     int to_row = move_str[3] - '1';
-    return {from_row, from_col, to_row, to_col};
+    
+    PieceType promotion = PieceType::None;
+    if (move_str.length() >= 5) {
+        switch (move_str[4]) {
+            case 'q': promotion = PieceType::Queen; break;
+            case 'r': promotion = PieceType::Rook; break;
+            case 'b': promotion = PieceType::Bishop; break;
+            case 'n': promotion = PieceType::Knight; break;
+        }
+    }
+    
+    return {from_row, from_col, to_row, to_col, promotion};
 }
 
 // Convert Move to notation like "e2e4"
@@ -98,16 +85,61 @@ std::string move_to_string(const Move& move) {
     result += static_cast<char>('1' + move.from_row);
     result += static_cast<char>('a' + move.to_col);
     result += static_cast<char>('1' + move.to_row);
+    
+    if (move.promotion != PieceType::None) {
+        switch (move.promotion) {
+            case PieceType::Queen: result += 'q'; break;
+            case PieceType::Rook: result += 'r'; break;
+            case PieceType::Bishop: result += 'b'; break;
+            case PieceType::Knight: result += 'n'; break;
+            default: break;
+        }
+    }
     return result;
 }
 
-// Apply a move to the board
+Board parse_history(const std::string& history_path) {
+    Board board = make_starting_position();
+    std::ifstream history_file(history_path);
+    
+    if (!history_file.is_open()) {
+        std::cerr << "Warning: History file not found. Assuming starting position.\n";
+        return board;
+    }
+
+    std::string line;
+    while (std::getline(history_file, line)) {
+        // Trim whitespace (including \r)
+        while (!line.empty() && std::isspace(line.back())) {
+            line.pop_back();
+        }
+        while (!line.empty() && std::isspace(line.front())) {
+            line.erase(0, 1);
+        }
+
+        if (!line.empty()) {
+            Move move = parse_move(line);
+            // Replay the move
+            make_move(board, move);
+        }
+    }
+    
+    return board;
+}
+
+bool write_move(const std::string& move_path, const Move& move) {
+    std::ofstream move_file(move_path, std::ios::trunc);
+    if (!move_file.is_open()) {
+        std::cerr << "Failed to open move file: " << move_path << '\n';
+        return false;
+    }
+    move_file << move_to_string(move) << '\n';
+    return true;
+}
+
+// Apply a move to the board (wrapper for make_move for compatibility with test)
 void apply_move(Board& board, const Move& move) {
-    Piece piece = board.squares[move.from_row][move.from_col];
-    board.squares[move.from_row][move.from_col] = {PieceType::None, Color::None};
-    board.squares[move.to_row][move.to_col] = piece;
-    // Switch side to move
-    board.side_to_move = (board.side_to_move == Color::White) ? Color::Black : Color::White;
+    make_move(board, move);
 }
 
 // Print board (simple ASCII representation)
@@ -205,6 +237,9 @@ void run_test_mode() {
 } 
 
 int main(int argc, char* argv[]) {
+    // Initialize random seed
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
     ProgramOptions options;
     if (!parse_arguments(argc, argv, options)) {
         return 1;
@@ -215,15 +250,47 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    std::cout << "chessbot running...\n";
-    std::cout << summarize_history(options.history_path) << '\n';
+    std::cout << "chess-king running...\n";
+    
+    Board board = parse_history(options.history_path);
 
-    constexpr const char* kPlaceholderMove = "e2e4";
-    if (!write_dummy_move(options.move_path, kPlaceholderMove)) {
+
+    std::cerr << "=== Debug: Board State after history ===\n";
+    std::cerr << "  a b c d e f g h\n";
+    for (int row = 7; row >= 0; --row) {
+        std::cerr << (row + 1) << " ";
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& piece = board.squares[row][col];
+            char symbol = '.';
+            if (piece.type != PieceType::None) {
+                char symbols[] = {' ', 'P', 'N', 'B', 'R', 'Q', 'K'};
+                symbol = symbols[static_cast<int>(piece.type)];
+                if (piece.color == Color::Black) {
+                    symbol = static_cast<char>(std::tolower(symbol));
+                }
+            }
+            std::cerr << symbol << " ";
+        }
+        std::cerr << "\n";
+    }
+    std::cerr << "\nSide to move: " 
+              << (board.side_to_move == Color::White ? "White" : "Black") << "\n\n";
+    
+
+    std::vector<Move> moves = generate_legal_moves(board);
+    
+    if (moves.empty()) {
+        std::cerr << "No legal moves available! (Checkmate or Stalemate)\n";
+
+        return 1;
+    }
+    
+    int random_index = std::rand() % moves.size();
+    Move best_move = moves[random_index];
+    if (!write_move(options.move_path, best_move)) {
         return 1;
     }
 
-    std::cout << "Wrote move " << kPlaceholderMove << " to " << options.move_path << '\n';
+    std::cout << "Wrote move " << move_to_string(best_move) << " to " << options.move_path << '\n';
     return 0;
 }
-
