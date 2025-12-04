@@ -118,6 +118,24 @@ bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_ro
     return true; // Blocked by friendly piece
 }
 
+void pawn_move_promotion(int from_row, int from_col, int to_row, int to_col, Color color, std::vector<move>& moves)
+{
+    bool promote_rank = (color == Color::White && to_row == BOARD_SIZE -1) ||
+                        (color == Color::Black && to_row == 0);
+
+
+    if (!promote_rank){
+        moves.emplace_back(from_row, from_col, to_row, to_col);
+        return;
+    }
+
+    moves.emplace_back(from_row, from_col, to_row, to_col, QUEEN);
+    moves.emplace_back(from_row, from_col, to_row, to_col, ROOK);
+    moves.emplace_back(from_row, from_col, to_row, to_col, BISHOP);
+    moves.emplace_back(from_row, from_col, to_row, to_col, KNIGHT);
+
+}
+
 void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     const Piece& piece = board.squares[row][col];
     int direction = (piece.color == Color::White) ? 1 : -1;
@@ -126,7 +144,7 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>
     // Move forward 1
     int next_row = row + direction;
     if (is_valid_square(next_row, col) && board.squares[next_row][col].type == PieceType::None) {
-        moves.emplace_back(row, col, next_row, col);
+        pawn_move_promotion(row, col, next_row, col, piece.color, moves);
 
         // Move forward 2 (only if moved forward 1)
         int two_steps_row = row + 2 * direction;
@@ -141,7 +159,7 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>
         if (is_valid_square(next_row, next_col)) {
             const Piece& target = board.squares[next_row][next_col];
             if (target.type != PieceType::None && target.color != piece.color) {
-                moves.emplace_back(row, col, next_row, next_col);
+                pawn_move_promotion(row, col, next_row, next_col);
             }
         }
     }
