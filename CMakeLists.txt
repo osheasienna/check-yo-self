@@ -11,6 +11,7 @@ add_executable(chess-king
     1_construct_board.cpp
     2_generate_legal_moves.cpp
     make_move.cpp
+    5_generate_output.cpp
 )
 
 target_include_directories(chess-king
