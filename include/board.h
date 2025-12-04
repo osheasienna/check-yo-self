@@ -34,8 +34,8 @@ struct Board {
 };
 
 Board make_starting_position();
-void make_move(Board& board, const Move& m);
-std::vector<Move> generate_legal_moves(const Board& board);
+void make_move(Board& board, const move& m);
+std::vector<move> generate_legal_moves(const Board& board);
 
 
 int evaluate_board(const Board& board);

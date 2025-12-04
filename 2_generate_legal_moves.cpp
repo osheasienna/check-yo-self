@@ -159,7 +159,7 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>
         if (is_valid_square(next_row, next_col)) {
             const Piece& target = board.squares[next_row][next_col];
             if (target.type != PieceType::None && target.color != piece.color) {
-                pawn_move_promotion(row, col, next_row, next_col);
+                pawn_move_promotion(row, col, next_row, next_col,piece.color, moves);
             }
         }
     }

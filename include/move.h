@@ -2,6 +2,9 @@
 #define MOVE_H
 
 #include <string>
+#include <string>
+#include <fstream>   // pour std::ofstream
+#include <iostream>  // pour std::cerr, std::endl
 
 enum promotion_piece_type {
     NONE,
@@ -71,3 +74,4 @@ bool write_move_to_file(move m, std::string path) {
 
     return true;
 }
+#endif
