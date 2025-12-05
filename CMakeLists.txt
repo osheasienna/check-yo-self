@@ -10,6 +10,8 @@ add_executable(chess-king
     src/main.cpp
     1_construct_board.cpp
     2_generate_legal_moves.cpp
+    3_search_moves.cpp
+    4_select_best_move.cpp
     make_move.cpp
     5_generate_output.cpp
 )

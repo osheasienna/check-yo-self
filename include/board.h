@@ -39,5 +39,6 @@ std::vector<move> generate_legal_moves(const Board& board);
 
 
 int evaluate_board(const Board& board);
+move find_best_move(const Board& board, int depth);
 
 #endif // BOARD_H

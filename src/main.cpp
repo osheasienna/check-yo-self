@@ -21,15 +21,9 @@ void print_usage(const char* program_name) {
 struct ProgramOptions {
     std::string history_path;
     std::string move_path;
-    bool test_mode = false;
 };
 
 bool parse_arguments(int argc, char* argv[], ProgramOptions& options) {
-    if (argc == 2 && std::string(argv[1]) == "--test") {
-        options.test_mode = true;
-        return true;
-    }
-
     if (argc < 5) {
         print_usage(argv[0]);
         return false;
@@ -107,48 +101,6 @@ Board parse_history(const std::string& history_path) {
     return board;
 }
 
-// Print board (simple ASCII representation)
-void print_board(const Board& board) {
-    std::cout << "\n  a b c d e f g h\n";
-    for (int row = 7; row >= 0; --row) {
-        std::cout << (row + 1) << " ";
-        for (int col = 0; col < BOARD_SIZE; ++col) {
-            const Piece& piece = board.squares[row][col];
-            char symbol = '.';
-            if (piece.type != PieceType::None) {
-                char symbols[] = {' ', 'P', 'N', 'B', 'R', 'Q', 'K'};
-                symbol = symbols[static_cast<int>(piece.type)];
-                if (piece.color == Color::Black) {
-                    symbol = static_cast<char>(std::tolower(symbol));
-                }
-            }
-            std::cout << symbol << " ";
-        }
-        std::cout << "\n";
-    }
-    std::cout << "\nSide to move: " 
-              << (board.side_to_move == Color::White ? "White" : "Black") << "\n\n";
-}
-
-void run_test_mode() {
-    Board board = make_starting_position();
-    
-    std::cout << "=== Starting Position ===\n";
-    print_board(board);
-    
-    std::vector<move> moves = generate_legal_moves(board);
-    std::cout << "Legal moves for White: " << moves.size() << "\n";
-    for (size_t i = 0; i < moves.size(); ++i) {
-        std::cout << move_to_uci(moves[i]);
-        if ((i + 1) % 10 == 0) {
-            std::cout << "\n";
-        } else {
-            std::cout << " ";
-        }
-    }
-    std::cout << "\n\n";
-}
-
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -160,37 +112,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (options.test_mode) {
-        run_test_mode();
-        return 0;
-    }
-
     std::cout << "chess-king running...\n";
     
     // 1. Parse history and reconstruct board state
     Board board = parse_history(options.history_path);
-
-    // Debug: Print board state to stderr
-    std::cerr << "=== Debug: Board State after history ===\n";
-    std::cerr << "  a b c d e f g h\n";
-    for (int row = 7; row >= 0; --row) {
-        std::cerr << (row + 1) << " ";
-        for (int col = 0; col < BOARD_SIZE; ++col) {
-            const Piece& piece = board.squares[row][col];
-            char symbol = '.';
-            if (piece.type != PieceType::None) {
-                char symbols[] = {' ', 'P', 'N', 'B', 'R', 'Q', 'K'};
-                symbol = symbols[static_cast<int>(piece.type)];
-                if (piece.color == Color::Black) {
-                    symbol = static_cast<char>(std::tolower(symbol));
-                }
-            }
-            std::cerr << symbol << " ";
-        }
-        std::cerr << "\n";
-    }
-    std::cerr << "\nSide to move: " 
-              << (board.side_to_move == Color::White ? "White" : "Black") << "\n\n";
     
     // 2. Generate legal moves for the current side
     std::vector<move> moves = generate_legal_moves(board);
@@ -200,9 +125,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // 3. Pick a random legal move
-    int random_index = std::rand() % moves.size();
-    move best_move = moves[random_index];
+    // 3. Search for the best move using Negamax
+    constexpr int SEARCH_DEPTH = 4;
+    move best_move = find_best_move(board, SEARCH_DEPTH);
 
     // 4. Write the move using move.h function
     if (!write_move_to_file(best_move, options.move_path)) {
