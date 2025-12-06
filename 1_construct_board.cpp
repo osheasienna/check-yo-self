@@ -29,10 +29,10 @@ Board make_starting_position() {
 
     board.side_to_move = Color::White;
 
-    bool white_can_castle_kingside = true;
-    bool white_can_castle_queenside = true;
-    bool black_can_castle_kingside = true;
-    bool black_can_castle_queenside = true;
+    board.white_can_castle_kingside = true;
+    board.white_can_castle_queenside = true;
+    board.black_can_castle_kingside = true;
+    board.black_can_castle_queenside = true;
     
     return board;
 }

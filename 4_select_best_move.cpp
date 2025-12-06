@@ -79,4 +79,3 @@ move find_best_move(const Board& board, int depth) {
     }
     return select_move(board, depth);
 }
-

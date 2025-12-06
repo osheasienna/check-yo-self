@@ -37,7 +37,7 @@ void make_move(Board& board, const move& m) {
     if (piece.type == PieceType::King)
     {
         int row = m.from_row;
-        int delta_col = m.to_col - m.to_row;
+        int delta_col = m.to_col - m.from_col;
 
         if (piece.color == Color::White)
         {
