@@ -118,6 +118,7 @@ bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_ro
     return true; // Blocked by friendly piece
 }
 
+//pawn pormotion
 void pawn_move_promotion(int from_row, int from_col, int to_row, int to_col, Color color, std::vector<move>& moves)
 {
     bool promote_rank = (color == Color::White && to_row == BOARD_SIZE -1) ||
@@ -208,6 +209,77 @@ void generate_queen_moves(const Board& board, int row, int col, std::vector<move
     generate_sliding_moves(board, row, col, directions, 8, moves);
 }
 
+void generate_castling_moves(const Board& board, int row, int col, std::vector<move>& moves)
+{
+    const Piece& king = board.squares[row][col];
+    if (king.type != PieceType::King) return;
+
+    Color color = king.color;
+    int back_rank = (color == Color::White) ? 0 : 7;
+
+    if (row != back_rank || col != 4) return;
+
+    bool can_kingside = (color == Color::White ? board.white_can_castle_kingside : board.black_can_castle_kingside);
+
+    if (can_kingside )
+    {
+        if (board.squares[back_rank][5].type == PieceType::None && board.squares[back_rank][6].type == PieceType::None)
+        {
+            const Piece& rook = board.squares[back_rank][7];
+            if(rook.type == PieceType::Rook && rook.color == color)
+            {
+                Board temp = board;
+
+                make_move(temp, move(back_rank, 4, back_rank, 5, NONE));
+
+                if(!is_in_check(temp, color))
+                {
+                    Board temp2 = temp;
+                    make_move(temp2, move(back_rank, 5, back_rank, 6, NONE));
+
+                    if (!is_in_check(temp2, color))
+                    {
+                        moves.emplace_back(back_rank, 4, back_rank, 6, NONE);
+                    }
+                }
+            }
+        }
+    }
+
+    bool can_queenside = (color == Color:: White ? board.white_can_castle_queenside : board.black_can_castle_queenside);
+
+    if (can_queenside)
+    {
+        if (board.squares[back_rank][3].type == PieceType::None && board.squares[back_rank][2].type == PieceType::None &&
+        board.squares[back_rank][1].type == PieceType::None)
+        {
+            const Piece& rook = board.squares[back_rank][0];
+            if (rook.type == PieceType::Rook && rook.color == color)
+            {
+                Board temp = board;
+
+                make_move(temp, move(back_rank, 4, back_rank, 3, NONE));
+
+                if(!is_in_check(temp, color))
+                {
+                    Board temp2 = temp;
+                    make_move(temp2, move(back_rank, 3, back_rank, 2, NONE));
+
+                    if (!is_in_check(temp2,color))
+                    {
+                        moves.emplace_back(back_rank, 4, back_rank, 2, NONE);
+
+                    } 
+                }
+            }
+
+        }
+    }
+
+
+}
+
+
 void generate_king_moves(const Board& board, int row, int col, std::vector<move>& moves) {
     static const int offsets[8][2] = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
@@ -217,6 +289,8 @@ void generate_king_moves(const Board& board, int row, int col, std::vector<move>
     for (auto& offset : offsets) {
         add_move_if_valid(board, row, col, row + offset[0], col + offset[1], moves);
     }
+
+    generate_castling_moves(board, row, col, moves);
 }
 
 } 

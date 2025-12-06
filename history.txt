@@ -1,8 +1,8 @@
-d2d4
+e2e4
 e7e5
-b1a3
-f8b4
-c2c3
-b4c3
-c1d2
-c3d2
+g1f3
+b8c6
+f1c4
+g8f6
+e1g1
+e8g8
