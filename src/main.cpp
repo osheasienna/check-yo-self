@@ -82,6 +82,36 @@ namespace {
         return move(from_row, from_col, to_row, to_col, promotion);
     }
 
+    // Print the board state for debugging/verification
+    // Displays the chess board in a readable format with piece positions,
+    // current side to move, and castling rights
+    void print_board(const Board& board) {
+        std::cout << "\n  a b c d e f g h\n";
+        for (int row = 7; row >= 0; --row) {
+            std::cout << (row + 1) << " ";
+            for (int col = 0; col < 8; ++col) {
+                const Piece& p = board.squares[row][col];
+                char c = '.';
+                if (p.type != PieceType::None) {
+                    // Map piece types to characters: P=Pawn, N=Knight, B=Bishop, R=Rook, Q=Queen, K=King
+                    char pieces[] = {' ', 'P', 'N', 'B', 'R', 'Q', 'K'};
+                    c = pieces[static_cast<int>(p.type)];
+                    // Lowercase for black pieces, uppercase for white
+                    if (p.color == Color::Black) c = std::tolower(c);
+                }
+                std::cout << c << " ";
+            }
+            std::cout << "\n";
+        }
+        // Display current side to move
+        std::cout << "Side to move: " << (board.side_to_move == Color::White ? "White" : "Black") << "\n";
+        // Display castling rights: W-K=White Kingside, W-Q=White Queenside, B-K=Black Kingside, B-Q=Black Queenside
+        std::cout << "Castling: W-K=" << board.white_can_castle_kingside 
+                  << " W-Q=" << board.white_can_castle_queenside
+                  << " B-K=" << board.black_can_castle_kingside
+                  << " B-Q=" << board.black_can_castle_queenside << "\n\n";
+    }
+
     // parse history file and reconstruct board state
     Board parse_history(const std::string& history_path) {
         Board board = make_starting_position();
@@ -125,6 +155,14 @@ int main(int argc, char* argv[]) {
     
     // 1. Parse history and reconstruct board state
     Board board = parse_history(options.history_path);
+    
+    // Display board state for verification (helps verify history was loaded correctly)
+    print_board(board);
+    
+    // Display evaluation score for verification
+    // Positive score = White advantage, negative score = Black advantage
+    int eval = evaluate_board(board);
+    std::cout << "Evaluation: " << eval << " (positive = White advantage, negative = Black advantage)\n";
     
     // 2. Generate legal moves for the current side
     std::vector<move> moves = generate_legal_moves(board);

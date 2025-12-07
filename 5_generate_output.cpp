@@ -27,7 +27,7 @@ std::string move_to_uci(move m) {
         if (m.promotion == QUEEN)  uci += 'q';
         if (m.promotion == ROOK)   uci += 'r';
         if (m.promotion == BISHOP) uci += 'b';
-        if (m.promotion == KNIGHT) uci += 'k';
+        if (m.promotion == KNIGHT) uci += 'n';  // 'n' for knight (not 'k' which is king)
     }
 
     return uci;
