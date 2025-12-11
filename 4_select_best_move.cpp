@@ -62,15 +62,15 @@ int negamax(Board& board, int depth, int alpha, int beta) {
     // loop through each legal move that player can make
     for (const auto& candidate : legal_moves) {
         // make a copy of the current board
-        Board next_board = board;
+        Undo undo;
         // apply the move to the copy
         // new_board = new poisition after the move is applied
-        make_move(next_board, candidate);
+        make_move(board, candidate, undo);
         // search the position resulting from playing this current move, but one level deeper
         // (DEPTH - 1)
         // -negamax because the opponent is now the player to make the move
         // -beta and -alpha to flip for the opponent
-        int score = -negamax(next_board, depth - 1, -beta, -alpha);
+        int score = -negamax(board, depth - 1, -beta, -alpha);
 
         // if move gives a better score, update best_score
         if (score > best_score) {
@@ -112,17 +112,21 @@ move select_move(const Board& board, int depth) {
     // initialise beta to the best possible score (best score for the opponent)
     int beta = POS_INF;
 
+    Board root = board;
+
     // loop through each legal move
     for (const auto& candidate : legal_moves) {
         // make a copy of the current board
-        Board next_board = board;
+        Undo undo;
         // apply candidate move to the copy
         // next_board = new position after we play candidate move
-        make_move(next_board, candidate);
+        make_move(root, candidate, undo);
         // call the recursive negamax search on resulting position
         // next_board = child position (DEPTH - 1)
         // -alpha and -beta to flip for the opponent
-        int score = -negamax(next_board, depth - 1, -beta, -alpha);
+        int score = -negamax(root, depth - 1, -beta, -alpha);
+
+        unmake_move(root, candidate, undo);
 
         // if move gives a better score, update best_score
         if (score > best_score) {

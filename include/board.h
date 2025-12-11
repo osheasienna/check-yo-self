@@ -39,8 +39,21 @@ struct Board {
     
 };
 
+struct Undo 
+{
+    Piece captured;
+    PieceType moved_piece_type;
+    bool white_can_castle_kingside;
+    bool white_can_castle_queenside;
+    bool black_can_castle_kingside;
+    bool black_can_castle_queenside;
+    Color side_to_move;
+};
+
 Board make_starting_position();
+void make_move(Board& board, const move& m, Undo& undo);
 void make_move(Board& board, const move& m);
+void unmake_move( Board& board, const move& m, const Undo& undo);
 std::vector<move> generate_legal_moves(const Board& board);
 
 
