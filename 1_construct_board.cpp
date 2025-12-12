@@ -1,5 +1,6 @@
 #include "board.h"
 
+// Builds the standard chess starting position.
 Board make_starting_position() {
     Board board;
 
@@ -22,13 +23,13 @@ Board make_starting_position() {
         board.squares[row][6] = {PieceType::Knight, color};
         board.squares[row][7] = {PieceType::Rook,   color};
     };
-
+     // Place back ranks: White on row 0, Black on row 7
     place_back_rank(0, Color::White);
-
     place_back_rank(7, Color::Black);
 
+    // White moves first
     board.side_to_move = Color::White;
-
+    // All castling rights are initially available
     board.white_can_castle_kingside = true;
     board.white_can_castle_queenside = true;
     board.black_can_castle_kingside = true;

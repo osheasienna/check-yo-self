@@ -37,6 +37,10 @@ struct Board {
     bool black_can_castle_kingside = true;
     bool black_can_castle_queenside = true;
     
+    // En passant: column where a pawn just moved 2 squares forward
+    // -1 means no en passant capture is possible
+    // Set when a pawn moves 2 squares from its starting position
+    int en_passant_col = -1;
 };
 
 struct Undo 
@@ -48,6 +52,8 @@ struct Undo
     bool black_can_castle_kingside;
     bool black_can_castle_queenside;
     Color side_to_move;
+    // Save en passant state so we can restore it when undoing moves
+    int en_passant_col;
 };
 
 Board make_starting_position();

@@ -3,14 +3,37 @@
 
 void make_move(Board& board, const move& m, Undo& undo) {
 
+    // Save current board state for undo
     undo.white_can_castle_kingside = board.white_can_castle_kingside;
     undo.white_can_castle_queenside = board.white_can_castle_queenside;
     undo.black_can_castle_kingside = board.black_can_castle_kingside;
     undo.black_can_castle_queenside = board.black_can_castle_queenside;
     undo.side_to_move = board.side_to_move;
+    undo.en_passant_col = board.en_passant_col;  // Save en passant state
+
+    // Reset en passant at the start of each move (will be set again if a 2-square move happens)
+    board.en_passant_col = -1;
 
     Piece piece = board.squares[m.from_row][m.from_col];
     Piece captured = board.squares[m.to_row][m.to_col];
+
+    // Check if this is an en passant capture
+    // En passant happens when: pawn moves diagonally, destination is empty, and en passant was possible
+    bool is_en_passant = false;
+    if (piece.type == PieceType::Pawn && 
+        m.from_col != m.to_col &&  // Moving diagonally (capture)
+        captured.type == PieceType::None &&  // Destination square is empty
+        undo.en_passant_col == m.to_col) {  // En passant was possible on this column
+        
+        // This is an en passant capture!
+        is_en_passant = true;
+        // The captured pawn is on the "passed over" square (same row as source, destination column)
+        int captured_pawn_row = m.from_row;
+        int captured_pawn_col = m.to_col;
+        captured = board.squares[captured_pawn_row][captured_pawn_col];
+        // Remove the captured pawn from its original position
+        board.squares[captured_pawn_row][captured_pawn_col] = {PieceType::None, Color::None};
+    }
 
     undo.moved_piece_type = piece.type;
     undo.captured = captured;
@@ -96,6 +119,18 @@ void make_move(Board& board, const move& m, Undo& undo) {
 
     board.squares[m.to_row][m.to_col] = piece;
 
+    // Detect if a pawn moved 2 squares forward from its starting position
+    // This creates an en passant opportunity for the opponent
+    if (piece.type == PieceType::Pawn) {
+        int start_row = (piece.color == Color::White) ? 1 : 6;
+        int row_delta = std::abs(m.to_row - m.from_row);
+        
+        // If pawn moved exactly 2 squares forward from starting row, set en passant column
+        if (m.from_row == start_row && row_delta == 2) {
+            board.en_passant_col = m.from_col;  // Store the column of the pawn that moved 2 squares
+        }
+    }
+
     // Switch side to move
     board.side_to_move = (board.side_to_move == Color::White) ? Color::Black : Color::White;
 }
@@ -108,7 +143,9 @@ void make_move(Board& board, const move& m)
 
 void unmake_move(Board& board, const move& m, const Undo& undo)
 {
+    // Restore board state
     board.side_to_move = undo.side_to_move;
+    board.en_passant_col = undo.en_passant_col;  // Restore en passant state
 
     board.white_can_castle_kingside = undo.white_can_castle_kingside;
     board.white_can_castle_queenside = undo.white_can_castle_queenside;
@@ -117,6 +154,7 @@ void unmake_move(Board& board, const move& m, const Undo& undo)
 
     Piece piece = board.squares[m.to_row][m.to_col];
 
+    // Handle castling undo (restore rook position)
     if(undo.moved_piece_type == PieceType::King)
     {
         int row = m.from_row;
@@ -138,8 +176,26 @@ void unmake_move(Board& board, const move& m, const Undo& undo)
         }
     }
 
+    // Restore piece type (in case of promotion)
     piece.type = undo.moved_piece_type;
 
+    // Restore the moved piece to its original position
     board.squares[m.from_row][m.from_col] = piece;
+    
+    // Restore captured piece (or empty square)
     board.squares[m.to_row][m.to_col] = undo.captured;
+
+    // Handle en passant undo: if this was an en passant capture, restore the captured pawn
+    // En passant capture: pawn moved diagonally, captured a pawn, and destination is now empty
+    if (undo.moved_piece_type == PieceType::Pawn &&
+        m.from_col != m.to_col &&  // Diagonal move
+        undo.captured.type == PieceType::Pawn &&  // Captured a pawn
+        board.squares[m.to_row][m.to_col].type == PieceType::None) {  // Destination is empty
+        
+        // This was an en passant capture - restore the captured pawn to its original position
+        // The captured pawn was on the "passed over" square (same row as source, destination column)
+        int captured_pawn_row = m.from_row;
+        int captured_pawn_col = m.to_col;
+        board.squares[captured_pawn_row][captured_pawn_col] = undo.captured;
+    }
 }
