@@ -1,5 +1,6 @@
 #include "board.h"
 #include <vector>
+#include <algorithm>  // For std::sort to order moves
 
 // implemented negamax with alpha-beta pruning
 // generate legal moves, simulate the move, evaluate the board, choose best score 
@@ -10,6 +11,20 @@
 namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
+
+
+// Material values for MVV-LVA move ordering
+// These values match the ones in 3_search_moves.cpp
+// Used to calculate: 10 * value_of_victim - value_of_attacker
+constexpr int MATERIAL_VALUES[] = {
+    0,   // None
+    100, // Pawn
+    320, // Knight
+    330, // Bishop
+    500, // Rook
+    900, // Queen
+    0    // King (not used in captures)
+};
 
 // helper to convert score based on the current player
 int evaluate_for_current_player(const Board& board) {
@@ -32,6 +47,58 @@ bool is_capture_move(const Board& board, const move& m) {
     const Piece& target = board.squares[m.to_row][m.to_col];
     return target.type != PieceType::None &&
            target.color != board.side_to_move;
+}
+
+/*
+ * calculate_move_score
+ * --------------------
+ * Assigns a score to a move for move ordering using MVV-LVA heuristic.
+ * Higher scores = better moves (will be searched first).
+ * 
+ * MVV-LVA: Most Valuable Victim - Least Valuable Aggressor
+ * - Captures: 10 * value_of_victim - value_of_attacker
+ *   Example: PxQ (Pawn takes Queen) = 10*900 - 100 = 8900
+ *   Example: RxN (Rook takes Knight) = 10*320 - 500 = 2700
+ * - Promotions: High score (+900)
+ * - Quiet moves: 0
+ */
+ int calculate_move_score(const Board& board, const move& m) {
+    // Check if this is a promotion move
+    // Promotions are very valuable, give them high priority
+    if (m.promotion != NONE) {
+        return 900;  // High score for promotions
+    }
+    
+    // Get the piece that is moving (the aggressor)
+    const Piece& moving_piece = board.squares[m.from_row][m.from_col];
+    int attacker_value = MATERIAL_VALUES[static_cast<int>(moving_piece.type)];
+    
+    // Check if this is a normal capture (destination square has an enemy piece)
+    const Piece& target = board.squares[m.to_row][m.to_col];
+    if (target.type != PieceType::None && target.color != board.side_to_move) {
+        // This is a capture! Calculate MVV-LVA score
+        int victim_value = MATERIAL_VALUES[static_cast<int>(target.type)];
+        // MVV-LVA formula: 10 * victim - attacker
+        // Higher victim value = better, lower attacker value = better
+        return 10 * victim_value - attacker_value;
+    }
+    
+    // Check for en passant capture
+    // En passant: pawn moves diagonally, destination is empty, but en passant is possible
+    if (moving_piece.type == PieceType::Pawn &&
+        m.from_col != m.to_col &&  // Diagonal move
+        target.type == PieceType::None &&  // Destination is empty
+        board.en_passant_col == m.to_col) {  // En passant opportunity exists
+        
+        // En passant captures a pawn (value 100)
+        // Attacker is also a pawn (value 100)
+        int victim_value = MATERIAL_VALUES[static_cast<int>(PieceType::Pawn)];
+        return 10 * victim_value - attacker_value;  // 10 * 100 - 100 = 900
+    }
+    
+    // Quiet move (no capture, no promotion)
+    // These moves get the lowest priority
+    return 0;
 }
 
 /*
@@ -133,6 +200,16 @@ int negamax(Board& board, int depth, int alpha, int beta) {
     if (legal_moves.empty()) {
         return evaluate_terminal(board);
     }
+
+        // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
+    // This drastically improves alpha-beta pruning efficiency
+    // Good moves (captures, promotions) are tried first, leading to more cutoffs
+    std::sort(legal_moves.begin(), legal_moves.end(), 
+        [&board](const move& a, const move& b) {
+            // Sort in descending order (highest score first)
+            // Moves with higher scores will be searched first
+            return calculate_move_score(board, a) > calculate_move_score(board, b);
+        });
 
     int best_score = NEG_INF;
 
