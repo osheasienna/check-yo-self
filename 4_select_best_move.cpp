@@ -19,6 +19,86 @@ int evaluate_for_current_player(const Board& board) {
     return (board.side_to_move == Color::White) ? eval : -eval;
 }
 
+/*
+ * is_capture_move
+ * --------------
+ * Returns true if the move is a capture in the current position.
+ *
+ * A normal capture means the destination square contains an enemy piece.
+ * En passant is also a capture even though the destination square is empty.
+ */
+bool is_capture_move(const Board& board, const move& m) {
+    // Normal capture: destination square contains a piece
+    const Piece& target = board.squares[m.to_row][m.to_col];
+    return target.type != PieceType::None &&
+           target.color != board.side_to_move;
+}
+
+/*
+ * quiescence_search
+ * ----------------
+ * Extends the search at depth 0 by exploring ONLY capture moves.
+ * This avoids the horizon effect where the engine evaluates a position
+ * in the middle of a capture exchange.
+ *
+ * Alpha-beta logic is the same idea as negamax:
+ *  - stand_pat is the static evaluation if we stop right now.
+ *  - if stand_pat >= beta -> fail-high cutoff.
+ *  - otherwise, we try capture moves and update alpha.
+ */
+int quiescence_search(Board& board, int alpha, int beta) {
+    // 1) Static evaluation ("stand pat")
+    int stand_pat = evaluate_for_current_player(board);
+
+    // 2) If even standing still is too good, cutoff
+    if (stand_pat >= beta) {
+        return beta;
+    }
+
+    // 3) Improve alpha with stand_pat if possible
+    if (stand_pat > alpha) {
+        alpha = stand_pat;
+    }
+
+    // 4) Generate legal moves and filter to captures
+    std::vector<move> moves = generate_legal_moves(board);
+
+    // Terminal position (mate/stalemate)
+    if (moves.empty()) {
+        return evaluate_terminal(board);
+    }
+
+    // 5) Only search capture moves
+    for (const move& m : moves) {
+        if (!is_capture_move(board, m)) {
+            continue;
+        }
+
+        // Make the capture (in-place), keeping Undo info
+        Undo undo;
+        make_move(board, m, undo);
+
+        // Negamax recursion: flip sign and window
+        int score = -quiescence_search(board, -beta, -alpha);
+
+        // Restore board
+        unmake_move(board, m, undo);
+
+        // Alpha-beta cutoff
+        if (score >= beta) {
+            return beta;
+        }
+
+        // Improve alpha
+        if (score > alpha) {
+            alpha = score;
+        }
+    }
+
+    // 6) Best score found in this quiescence node
+    return alpha;
+}
+
 // NEGAMAX ALGORITHM
 /* - each position has a score, positive = good for player to move, negative = bad for player to move
    - when turn changes, flip the score (whats good for the current player is bad for the opponent)
@@ -41,51 +121,49 @@ int evaluate_for_current_player(const Board& board) {
 // BETA: best score for the opponent
 int negamax(Board& board, int depth, int alpha, int beta) {
     // BASE CASE
-    // if DEPTH = 0, stop searching and return evaluation of the board
+    // If depth is exhausted, switch to quiescence search (captures only)
     if (depth == 0) {
-        return evaluate_for_current_player(board);
+        return quiescence_search(board, alpha, beta);
     }
 
-    // RECURSIVE CASE
-    // generate all legal moves
+    // Generate all legal moves
     std::vector<move> legal_moves = generate_legal_moves(board);
-    // if no legal moves => either in checkmate or stalemate
-    // doesn't check these states independently, just evaluates the board as is
-    // TO DO: treat checkmate and stalemate states separately
+
+    // Terminal node: checkmate or stalemate
     if (legal_moves.empty()) {
-        return evaluate_for_current_player(board);
+        return evaluate_terminal(board);
     }
 
-    // start with worst possible score for current player
     int best_score = NEG_INF;
 
-    // loop through each legal move that player can make
+    // Search all moves
     for (const auto& candidate : legal_moves) {
-        // make a copy of the current board
+        // Apply move in-place and remember everything needed to undo it
         Undo undo;
-        // apply the move to the copy
-        // new_board = new poisition after the move is applied
         make_move(board, candidate, undo);
-        // search the position resulting from playing this current move, but one level deeper
-        // (DEPTH - 1)
-        // -negamax because the opponent is now the player to make the move
-        // -beta and -alpha to flip for the opponent
+
+        // Negamax recursion with flipped alpha/beta window
         int score = -negamax(board, depth - 1, -beta, -alpha);
 
-        // if move gives a better score, update best_score
+        // Undo move to restore previous board state
+        unmake_move(board, candidate, undo);
+
+        // Update best score
         if (score > best_score) {
             best_score = score;
         }
-        // // update alpha to the best score we are getting from the current move
+
+        // Update alpha
         if (score > alpha) {
             alpha = score;
         }
-        // stop checking further moves
+
+        // Alpha-beta cutoff
         if (alpha >= beta) {
-            break; // Alpha-Beta cutoff
+            break;
         }
     }
-    // return the best score for the current player
+
     return best_score;
 }
 
@@ -112,21 +190,20 @@ move select_move(const Board& board, int depth) {
     // initialise beta to the best possible score (best score for the opponent)
     int beta = POS_INF;
 
-    Board root = board;
-
     // loop through each legal move
     for (const auto& candidate : legal_moves) {
+        Board temp = board;
         // make a copy of the current board
         Undo undo;
         // apply candidate move to the copy
         // next_board = new position after we play candidate move
-        make_move(root, candidate, undo);
+        make_move(temp, candidate, undo);
         // call the recursive negamax search on resulting position
         // next_board = child position (DEPTH - 1)
         // -alpha and -beta to flip for the opponent
-        int score = -negamax(root, depth - 1, -beta, -alpha);
+        int score = -negamax(temp, depth - 1, -beta, -alpha);
 
-        unmake_move(root, candidate, undo);
+        unmake_move(temp, candidate, undo);
 
         // if move gives a better score, update best_score
         if (score > best_score) {

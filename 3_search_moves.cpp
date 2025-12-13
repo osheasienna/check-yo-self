@@ -197,3 +197,131 @@ int evaluate_board(const Board& board) {
     return score;
 }
 
+// Helper: checks if a square is attacked by any piece of attacker_color
+static bool is_attacked(const Board& board, int target_row, int target_col, Color attacker_color) {
+    // Direction pawns attack from (depends on color)
+    int pawn_dir = (attacker_color == Color::White) ? -1 : 1;
+
+    // Pawn attacks
+    for (int dc : {-1, 1}) {
+        int r = target_row + pawn_dir;
+        int c = target_col + dc;
+        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::Pawn && p.color == attacker_color) {
+                return true;
+            }
+        }
+    }
+
+    // Knight attacks
+    const int knight_offsets[8][2] = {
+        { 2, 1}, { 1, 2}, {-1, 2}, {-2, 1},
+        {-2,-1}, {-1,-2}, { 1,-2}, { 2,-1}
+    };
+    for (auto& off : knight_offsets) {
+        int r = target_row + off[0];
+        int c = target_col + off[1];
+        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::Knight && p.color == attacker_color) {
+                return true;
+            }
+        }
+    }
+
+    // Sliding pieces: bishop / rook / queen
+    const int directions[8][2] = {
+        { 1, 0}, {-1, 0}, { 0, 1}, { 0,-1}, // rook-like
+        { 1, 1}, { 1,-1}, {-1, 1}, {-1,-1}  // bishop-like
+    };
+
+    for (int d = 0; d < 8; ++d) {
+        int dr = directions[d][0];
+        int dc = directions[d][1];
+        int r = target_row + dr;
+        int c = target_col + dc;
+
+        while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+            const Piece& p = board.squares[r][c];
+            if (p.type != PieceType::None) {
+                if (p.color == attacker_color) {
+                    if (
+                        (d < 4 && (p.type == PieceType::Rook || p.type == PieceType::Queen)) ||
+                        (d >= 4 && (p.type == PieceType::Bishop || p.type == PieceType::Queen))
+                    ) {
+                        return true;
+                    }
+                }
+                break;
+            }
+            r += dr;
+            c += dc;
+        }
+    }
+
+    // King attacks (adjacent squares)
+    for (int dr = -1; dr <= 1; ++dr) {
+        for (int dc = -1; dc <= 1; ++dc) {
+            if (dr == 0 && dc == 0) continue;
+            int r = target_row + dr;
+            int c = target_col + dc;
+            if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+                const Piece& p = board.squares[r][c];
+                if (p.type == PieceType::King && p.color == attacker_color) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+
+static bool is_king_in_check(const Board& board, Color color) {
+    int king_row = -1;
+    int king_col = -1;
+
+    // 1) Find the king square for the given color
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::King && p.color == color) {
+                king_row = row;
+                king_col = col;
+                // Break out of both loops
+                row = BOARD_SIZE;
+                break;
+            }
+        }
+    }
+
+    // Safety: if no king found, treat as "not in check"
+    if (king_row == -1) {
+        return false;
+    }
+
+    // 2) The king is in check if its square is attacked by the opponent
+    Color enemy = (color == Color::White) ? Color::Black : Color::White;
+
+    // IMPORTANT: this assumes is_attacked(board, target_row, target_col, attacker_color)
+    // means "is (target_row,target_col) attacked by attacker_color?"
+    return is_attacked(board, king_row, king_col, enemy);
+}
+
+int evaluate_terminal(const Board& board) {
+    // Keep mate score comfortably below your search infinities
+    constexpr int CHECKMATE_SCORE = 100000;
+
+    // No legal moves + in check => checkmate
+    if (is_king_in_check(board, board.side_to_move)) {
+        return -CHECKMATE_SCORE;  // losing for side to move
+    }
+
+    // No legal moves + not in check => stalemate
+    return 0;
+}
+
+
+
