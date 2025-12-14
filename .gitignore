@@ -6,4 +6,5 @@ Makefile
 compile_commands.json
 chess-king
 uci_wrapper.py
+tests/
 

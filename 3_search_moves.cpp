@@ -108,6 +108,19 @@ constexpr std::array<int, 64> KING_TABLE = {
    -30,-40,-40,-50,-50,-40,-40,-30
 };
 
+// king activity in endgames: encourage centralization, discourage corners
+constexpr std::array<int, 64> KING_ENDGAME_TABLE = {
+    // Rank 1 to Rank 8 (corners negative, center positive)
+    -50,-30,-30,-30,-30,-30,-30,-50,
+    -30,-10,  5, 10, 10,  5,-10,-30,
+    -30,  5, 20, 25, 25, 20,  5,-30,
+    -30, 10, 25, 30, 30, 25, 10,-30,
+    -30, 10, 25, 30, 30, 25, 10,-30,
+    -30,  5, 20, 25, 25, 20,  5,-30,
+    -30,-10,  5, 10, 10,  5,-10,-30,
+    -50,-30,-30,-30,-30,-30,-30,-50
+};
+
 // MIRROR_SQUARE_INDEX FUNCTION
 // converts square index to mirror square index
 // used for the black pieces, so both can share PST as white
@@ -127,7 +140,8 @@ int mirror_square_index(int index) {
 // TYPE: type of the piece
 // COLOR: color of the piece
 // SQUARE_INDEX: index of the square
-int positional_bonus(PieceType type, Color color, int square_index) {
+// IS_ENDGAME: select king table based on game phase
+int positional_bonus(PieceType type, Color color, int square_index, bool is_endgame) {
     // if white, use the square index directly
     // if black, use the mirror square index
     int idx = (color == Color::White) ? square_index : mirror_square_index(square_index);
@@ -147,7 +161,7 @@ int positional_bonus(PieceType type, Color color, int square_index) {
         case PieceType::Queen:
             return QUEEN_TABLE[idx];
         case PieceType::King:
-            return KING_TABLE[idx];
+            return is_endgame ? KING_ENDGAME_TABLE[idx] : KING_TABLE[idx];
         case PieceType::None:
         default:
             return 0;
@@ -155,6 +169,10 @@ int positional_bonus(PieceType type, Color color, int square_index) {
 }
 
 } // namespace
+
+// Forward declarations for helpers defined later in this file.
+static bool is_attacked(const Board& board, int target_row, int target_col, Color attacker_color);
+static bool is_king_in_check(const Board& board, Color color);
 
 // EVALUATE_BOARD FUNCTION
 // BOARD: current board position
@@ -164,7 +182,19 @@ int evaluate_board(const Board& board) {
     // initialise score to 0, accumulate the total evaluation of the board
     int score = 0;
 
-    // double loop over all 64 squares on the board
+    // first pass: compute non-pawn material to decide phase
+    int non_pawn_material = 0;
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& piece = board.squares[row][col];
+            if (piece.type != PieceType::None && piece.type != PieceType::Pawn) {
+                non_pawn_material += MATERIAL_VALUES[static_cast<int>(piece.type)];
+            }
+        }
+    }
+    bool is_endgame = (non_pawn_material < 1500);
+
+    // second pass: evaluate material, PST, passed pawns
     for (int row = 0; row < BOARD_SIZE; ++row) {
         for (int col = 0; col < BOARD_SIZE; ++col) {
             // look at the Piece on this square
@@ -179,9 +209,48 @@ int evaluate_board(const Board& board) {
             // look up the material value for this piece type
             int material = MATERIAL_VALUES[static_cast<int>(piece.type)];
             // get the positional bonus based on the piece type, color, and square index
-            int positional = positional_bonus(piece.type, piece.color, square_index);
+            int positional = positional_bonus(piece.type, piece.color, square_index, is_endgame);
+            int passed_bonus = 0;
+
+            // passed pawn detection with rank-scaled bonus
+            if (piece.type == PieceType::Pawn) {
+                int pawn_dir = (piece.color == Color::White) ? 1 : -1;
+                int start_check_row = row + pawn_dir;
+                bool is_passed = true;
+
+                for (int check_file = col - 1; check_file <= col + 1 && is_passed; ++check_file) {
+                    if (check_file < 0 || check_file >= BOARD_SIZE) {
+                        continue;
+                    }
+                    for (int check_row = start_check_row;
+                         (piece.color == Color::White) ? check_row < BOARD_SIZE : check_row >= 0;
+                         check_row += pawn_dir) {
+                        const Piece& ahead = board.squares[check_row][check_file];
+                        if (ahead.type == PieceType::Pawn && ahead.color != piece.color) {
+                            is_passed = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_passed) {
+                    int rank = (piece.color == Color::White) ? row : (7 - row);
+                    if (rank >= 7) {
+                        passed_bonus = 200;
+                    } else if (rank >= 6) {
+                        passed_bonus = 100;
+                    } else if (rank >= 5) {
+                        passed_bonus = 50;
+                    } else if (rank >= 4) {
+                        passed_bonus = 30;
+                    } else if (rank >= 3) {
+                        passed_bonus = 20;
+                    }
+                }
+            }
+
             // combine material and positional bonuses into a single total score
-            int total = material + positional;
+            int total = material + positional + passed_bonus;
 
             // if the piece is white, add the total score to the score
             // if the piece is black, subtract the total score from the score
@@ -191,6 +260,15 @@ int evaluate_board(const Board& board) {
                 score -= total;
             }
         }
+    }
+
+    // simple check-related bonuses to encourage mating ideas
+    Color opponent = (board.side_to_move == Color::White) ? Color::Black : Color::White;
+    if (is_king_in_check(board, opponent)) {
+        score += (board.side_to_move == Color::White) ? 10 : -10;
+    }
+    if (is_king_in_check(board, board.side_to_move)) {
+        score += (board.side_to_move == Color::White) ? -20 : 20;
     }
 
     // return the final evaluation of the board

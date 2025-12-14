@@ -173,7 +173,7 @@ int main(int argc, char* argv[]) {
     }
     
     // 3. Search for the best move using Negamax
-    constexpr int SEARCH_DEPTH = 2; // safer depth for now
+    constexpr int SEARCH_DEPTH = 4; // safer depth for now
     move best_move = find_best_move(board, SEARCH_DEPTH);
 
     // 4. Write the move using move.h function
