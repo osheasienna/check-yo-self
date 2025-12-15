@@ -307,7 +307,7 @@ void generate_queen_moves(const Board& board, int row, int col, std::vector<move
     generate_sliding_moves(board, row, col, directions, 8, moves);
 }
 
-void generate_castling_moves(const Board& board, int row, int col, std::vector<move>& moves)
+void generate_castling_moves(Board& board, int row, int col, std::vector<move>& moves)
 {
     const Piece& king = board.squares[row][col];
     if (king.type != PieceType::King) return;
@@ -326,19 +326,27 @@ void generate_castling_moves(const Board& board, int row, int col, std::vector<m
             const Piece& rook = board.squares[back_rank][7];
             if(rook.type == PieceType::Rook && rook.color == color)
             {
-                Board temp = board;
+                Undo u1;
 
-                make_move(temp, move(back_rank, 4, back_rank, 5, NONE));
+                make_move(board, move(back_rank, 4, back_rank, 5, NONE), u1);
 
-                if(!is_in_check(temp, color))
+                bool check1 = !is_in_check(board, color);
+
+                Undo u2;
+                bool check2 = false;
+
+                if(check1)
                 {
-                    Board temp2 = temp;
-                    make_move(temp2, move(back_rank, 5, back_rank, 6, NONE));
+                    make_move(board, move(back_rank, 5, back_rank, 6, NONE), u2);
+                    check2 = !is_in_check(board, color);
+                    unmake_move(board, move(back_rank, 5, back_rank, 6, NONE), u2);
+                }
 
-                    if (!is_in_check(temp2, color))
-                    {
-                        moves.emplace_back(back_rank, 4, back_rank, 6, NONE);
-                    }
+                unmake_move(board, move(back_rank, 4, back_rank, 5, NONE), u1);
+
+                if (check1 && check2)
+                {
+                    moves.emplace_back(back_rank, 4, back_rank, 6, NONE);
                 }
             }
         }
@@ -354,31 +362,35 @@ void generate_castling_moves(const Board& board, int row, int col, std::vector<m
             const Piece& rook = board.squares[back_rank][0];
             if (rook.type == PieceType::Rook && rook.color == color)
             {
-                Board temp = board;
+                Undo u1;
+                make_move(board, move(back_rank, 4, back_rank, 3, NONE), u1);
+                bool check1 = !is_in_check(board, color);
 
-                make_move(temp, move(back_rank, 4, back_rank, 3, NONE));
+                Undo u2;
+                bool check2 = false;
 
-                if(!is_in_check(temp, color))
+                if(check1)
                 {
-                    Board temp2 = temp;
-                    make_move(temp2, move(back_rank, 3, back_rank, 2, NONE));
+                    make_move(board, move(back_rank, 3, back_rank, 2, NONE), u2);
+                    check2 = !is_in_check(board,color);
 
-                    if (!is_in_check(temp2,color))
-                    {
-                        moves.emplace_back(back_rank, 4, back_rank, 2, NONE);
+                    unmake_move(board, move(back_rank, 3, back_rank, 2, NONE), u2);
+                }
 
-                    } 
+                unmake_move(board, move(back_rank, 4, back_rank, 3, NONE), u1);
+
+                if (check1 && check2)
+                {
+                    moves.emplace_back(back_rank, 4, back_rank, 2, NONE);
                 }
             }
 
         }
     }
-
-
 }
 
 
-void generate_king_moves(const Board& board, int row, int col, std::vector<move>& moves) {
+void generate_king_moves(Board& board, int row, int col, std::vector<move>& moves) {
     static const int offsets[8][2] = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
@@ -393,7 +405,9 @@ void generate_king_moves(const Board& board, int row, int col, std::vector<move>
 
 } 
 
-std::vector<move> generate_legal_moves(const Board& board) {
+std::vector<move> generate_legal_moves(const Board& board_in) {
+    Board board = board_in;
+
     std::vector<move> moves;
     moves.reserve(50);
     std::vector<move> pseudo_legal_moves;
@@ -432,11 +446,15 @@ std::vector<move> generate_legal_moves(const Board& board) {
 
     // Filter moves that leave the king in check
     for (const auto& m : pseudo_legal_moves) {
-        Board temp_board = board;
-        make_move(temp_board, m);
-        if (!is_in_check(temp_board, board.side_to_move)) {
+        Undo u;
+        Color us = board.side_to_move;
+        make_move(board, m, u);
+
+        if (!is_in_check(board, us)) {
             moves.push_back(m);
         }
+
+        unmake_move(board, m , u);
     }
 
     return moves;

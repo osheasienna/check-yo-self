@@ -35,9 +35,12 @@ void make_move(Board& board, const move& m, Undo& undo) {
         board.squares[captured_pawn_row][captured_pawn_col] = {PieceType::None, Color::None};
     }
 
+
+    // store info needed for unmake move, piece type and captured
     undo.moved_piece_type = piece.type;
     undo.captured = captured;
 
+    // if rook is captured, then opponent castling rights might be lost
     if (captured.type == PieceType::Rook)
     {
         if (captured.color == Color::White)
@@ -135,9 +138,10 @@ void make_move(Board& board, const move& m, Undo& undo) {
     board.side_to_move = (board.side_to_move == Color::White) ? Color::Black : Color::White;
 }
 
+// introduce a dummy variable to avoid duplicate move logic while keeping plain make move for places where undo is unecessary
 void make_move(Board& board, const move& m)
 {
-    Undo dummy;
+    Undo dummy; 
     make_move(board, m, dummy);
 }
 

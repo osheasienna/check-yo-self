@@ -7,6 +7,7 @@
 
 constexpr int BOARD_SIZE = 8;
 
+/* Piecetype represents the kind of chess piece on a square*/
 enum class PieceType {
     None,
     Pawn,
@@ -17,16 +18,29 @@ enum class PieceType {
     King
 };
 
+/* Colour represents the player to which a piece belongs to */
+
 enum class Color {
     None,
     White,
     Black
 };
 
+/* a pPiece is defined by the Piectype and the player who owns it (Color)*/
+
 struct Piece {
     PieceType type = PieceType::None;
     Color color = Color::None;
 };
+
+/* Boards represents the complete game state
+
+it contains:
+1. the grid of pieces (8 x 8)
+2. which side is to move
+3. castling rights
+4. en passant information
+*/
 
 struct Board {
     std::array<std::array<Piece, BOARD_SIZE>, BOARD_SIZE> squares{};
@@ -43,6 +57,16 @@ struct Board {
     int en_passant_col = -1;
 };
 
+/* The undo structure stores what is necessary to restore the board so we don't have to make copies
+
+it stores:
+1. the piece that was captured 
+2. the piece type before promotion
+3. castling rights
+4. whose turn it was before the move
+5. en passant before the move
+*/
+
 struct Undo 
 {
     Piece captured;
@@ -57,8 +81,11 @@ struct Undo
 };
 
 Board make_starting_position();
+/* make move with undo*/
 void make_move(Board& board, const move& m, Undo& undo);
+/* used in places where no need to have undo*/
 void make_move(Board& board, const move& m);
+/*restores to the state before the make move*/
 void unmake_move( Board& board, const move& m, const Undo& undo);
 std::vector<move> generate_legal_moves(const Board& board);
 
