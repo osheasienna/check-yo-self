@@ -1,5 +1,7 @@
 #include "board.h"
 #include <vector>
+#include <iostream>
+#include <cstdlib>
 #include <algorithm>  // For std::sort to order moves
 
 // implemented negamax with alpha-beta pruning
@@ -11,6 +13,40 @@
 namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
+
+// DEBUG: verify make_move/unmake_move restore the board perfectly.
+// Enable by compiling with -DDEBUG_UNDO
+static bool boards_equal(const Board& a, const Board& b) {
+    if (a.side_to_move != b.side_to_move) return false;
+
+    if (a.white_can_castle_kingside  != b.white_can_castle_kingside)  return false;
+    if (a.white_can_castle_queenside != b.white_can_castle_queenside) return false;
+    if (a.black_can_castle_kingside  != b.black_can_castle_kingside) return false;
+    if (a.black_can_castle_queenside != b.black_can_castle_queenside) return false;
+
+    if (a.en_passant_row != b.en_passant_row) return false;
+    if (a.en_passant_col != b.en_passant_col) return false;
+
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            if (a.squares[r][c].type  != b.squares[r][c].type)  return false;
+            if (a.squares[r][c].color != b.squares[r][c].color) return false;
+        }
+    }
+    return true;
+}
+
+#ifdef DEBUG_UNDO
+static void debug_abort_board_mismatch(const move& m) {
+    std::cerr << "ERROR: Board mismatch after unmake_move for move: "
+              << "(" << m.from_row << "," << m.from_col << ")->(" << m.to_row << "," << m.to_col << ")";
+    if (m.promotion != NONE) {
+        std::cerr << " promo=" << static_cast<int>(m.promotion);
+    }
+    std::cerr << std::endl;
+    std::abort();
+}
+#endif
 
 
 // Material values for MVV-LVA move ordering
@@ -43,10 +79,24 @@ int evaluate_for_current_player(const Board& board) {
  * En passant is also a capture even though the destination square is empty.
  */
 bool is_capture_move(const Board& board, const move& m) {
-    // Normal capture: destination square contains a piece
+    const Piece& moving_piece = board.squares[m.from_row][m.from_col];
     const Piece& target = board.squares[m.to_row][m.to_col];
-    return target.type != PieceType::None &&
-           target.color != board.side_to_move;
+
+    // Normal capture: destination square contains an enemy piece
+    if (target.type != PieceType::None && target.color != board.side_to_move) {
+        return true;
+    }
+
+    // En passant capture: pawn moves diagonally onto the en passant target square and destination is empty
+    if (moving_piece.type == PieceType::Pawn &&
+        m.from_col != m.to_col &&
+        target.type == PieceType::None &&
+        board.en_passant_row == m.to_row &&
+        board.en_passant_col == m.to_col) {
+        return true;
+    }
+
+    return false;
 }
 
 /*
@@ -86,9 +136,10 @@ bool is_capture_move(const Board& board, const move& m) {
     // Check for en passant capture
     // En passant: pawn moves diagonally, destination is empty, but en passant is possible
     if (moving_piece.type == PieceType::Pawn &&
-        m.from_col != m.to_col &&  // Diagonal move
-        target.type == PieceType::None &&  // Destination is empty
-        board.en_passant_col == m.to_col) {  // En passant opportunity exists
+        m.from_col != m.to_col &&
+        target.type == PieceType::None &&
+        board.en_passant_row == m.to_row &&
+        board.en_passant_col == m.to_col) {  // En passant target square matches
         
         // En passant captures a pawn (value 100)
         // Attacker is also a pawn (value 100)
@@ -141,6 +192,9 @@ int quiescence_search(Board& board, int alpha, int beta) {
             continue;
         }
 
+#ifdef DEBUG_UNDO
+        const Board before = board;
+#endif
         // Make the capture (in-place), keeping Undo info
         Undo undo;
         make_move(board, m, undo);
@@ -150,6 +204,12 @@ int quiescence_search(Board& board, int alpha, int beta) {
 
         // Restore board
         unmake_move(board, m, undo);
+
+#ifdef DEBUG_UNDO
+        if (!boards_equal(board, before)) {
+            debug_abort_board_mismatch(m);
+        }
+#endif
 
         // Alpha-beta cutoff
         if (score >= beta) {
@@ -215,6 +275,9 @@ int negamax(Board& board, int depth, int alpha, int beta) {
 
     // Search all moves
     for (const auto& candidate : legal_moves) {
+#ifdef DEBUG_UNDO
+        const Board before = board;
+#endif
         // Apply move in-place and remember everything needed to undo it
         Undo undo;
         make_move(board, candidate, undo);
@@ -224,6 +287,12 @@ int negamax(Board& board, int depth, int alpha, int beta) {
 
         // Undo move to restore previous board state
         unmake_move(board, candidate, undo);
+
+#ifdef DEBUG_UNDO
+        if (!boards_equal(board, before)) {
+            debug_abort_board_mismatch(candidate);
+        }
+#endif
 
         // Update best score
         if (score > best_score) {
@@ -270,6 +339,9 @@ move select_move(const Board& board, int depth) {
     // loop through each legal move
     for (const auto& candidate : legal_moves) {
         Board temp = board;
+#ifdef DEBUG_UNDO
+        const Board before = temp;
+#endif
         // make a copy of the current board
         Undo undo;
         // apply candidate move to the copy
@@ -281,6 +353,12 @@ move select_move(const Board& board, int depth) {
         int score = -negamax(temp, depth - 1, -beta, -alpha);
 
         unmake_move(temp, candidate, undo);
+
+#ifdef DEBUG_UNDO
+        if (!boards_equal(temp, before)) {
+            debug_abort_board_mismatch(candidate);
+        }
+#endif
 
         // if move gives a better score, update best_score
         if (score > best_score) {

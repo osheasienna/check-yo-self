@@ -9,21 +9,24 @@ void make_move(Board& board, const move& m, Undo& undo) {
     undo.black_can_castle_kingside = board.black_can_castle_kingside;
     undo.black_can_castle_queenside = board.black_can_castle_queenside;
     undo.side_to_move = board.side_to_move;
-    undo.en_passant_col = board.en_passant_col;  // Save en passant state
+    undo.en_passant_row = board.en_passant_row;  // Save en passant state
+    undo.en_passant_col = board.en_passant_col;
     undo.was_en_passant = false;
 
-    // Reset en passant at the start of each move (will be set again if a 2-square move happens)
+    // Reset en passant at the start of each move (will be set again if a 2-square pawn move happens)
+    board.en_passant_row = -1;
     board.en_passant_col = -1;
 
     Piece piece = board.squares[m.from_row][m.from_col];
     Piece captured = board.squares[m.to_row][m.to_col];
 
     // Check if this is an en passant capture
-    // En passant happens when: pawn moves diagonally, destination is empty, and en passant was possible
-    if (piece.type == PieceType::Pawn && 
+    // En passant happens when: pawn moves diagonally, destination is empty, and destination matches en passant target square
+    if (piece.type == PieceType::Pawn &&
         m.from_col != m.to_col &&  // Moving diagonally (capture)
         captured.type == PieceType::None &&  // Destination square is empty
-        undo.en_passant_col == m.to_col) {  // En passant was possible on this column
+        undo.en_passant_row == m.to_row &&
+        undo.en_passant_col == m.to_col) {  // Destination matches en passant target square
         
         // This is an en passant capture!
         undo.was_en_passant = true;
@@ -128,9 +131,12 @@ void make_move(Board& board, const move& m, Undo& undo) {
         int start_row = (piece.color == Color::White) ? 1 : 6;
         int row_delta = std::abs(m.to_row - m.from_row);
         
-        // If pawn moved exactly 2 squares forward from starting row, set en passant column
+        // If pawn moved exactly 2 squares forward from starting row, set en passant target square
         if (m.from_row == start_row && row_delta == 2) {
-            board.en_passant_col = m.from_col;  // Store the column of the pawn that moved 2 squares
+            // The en passant target is the square the pawn "passed over"
+            int direction = (piece.color == Color::White) ? 1 : -1;
+            board.en_passant_row = m.from_row + direction;
+            board.en_passant_col = m.from_col;
         }
     }
 
@@ -149,6 +155,7 @@ void unmake_move(Board& board, const move& m, const Undo& undo)
 {
     // Restore board state
     board.side_to_move = undo.side_to_move;
+    board.en_passant_row = undo.en_passant_row;
     board.en_passant_col = undo.en_passant_col;  // Restore en passant state
 
     board.white_can_castle_kingside = undo.white_can_castle_kingside;

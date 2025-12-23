@@ -7,6 +7,12 @@
 std::string move_to_uci(move m) {
     std::string lookup_files = "abcdefgh";
 
+    // sanity checks to avoid out-of-bounds indexing and badly-formatted output
+    auto in_bounds = [](int x) { return 0 <= x && x < 8; };
+    if (!in_bounds(m.from_col) || !in_bounds(m.to_col) || !in_bounds(m.from_row) || !in_bounds(m.to_row)) {
+        return ""; // invalid move coordinates
+    }
+
     // 1. Convert columns (files)
     char letter_from = lookup_files[m.from_col];
     char letter_to = lookup_files[m.to_col];
@@ -24,10 +30,13 @@ std::string move_to_uci(move m) {
 
     // 4. Add promotion letter if needed
     if (m.promotion != NONE) {
-        if (m.promotion == QUEEN)  uci += 'q';
-        if (m.promotion == ROOK)   uci += 'r';
-        if (m.promotion == BISHOP) uci += 'b';
-        if (m.promotion == KNIGHT) uci += 'n';  // 'n' for knight (not 'k' which is king)
+        switch (m.promotion) {
+            case QUEEN:  uci += 'q'; break;
+            case ROOK:   uci += 'r'; break;
+            case BISHOP: uci += 'b'; break;
+            case KNIGHT: uci += 'k'; break; // Project format: 'k' encodes knight promotion
+            default: return ""; // Unknown promotion code
+        }
     }
 
     return uci;
@@ -36,6 +45,10 @@ std::string move_to_uci(move m) {
 bool write_move_to_file(move m, std::string path) {
     // 1. Convert move to UCI string
     std::string uci = move_to_uci(m);
+    if (uci.empty()) {
+        std::cerr << "Error: Could not encode move to UCI (invalid move)." << std::endl;
+        return false;
+    }
 
     // 2. Open the output file (overwrite mode)
     std::ofstream file(path);

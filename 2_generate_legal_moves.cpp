@@ -237,25 +237,17 @@ void generate_pawn_moves(const Board& board, int row, int col, std::vector<move>
     }
 
     // En passant capture: capture a pawn that just moved 2 squares forward
-    // Check if an en passant opportunity exists
-    if (board.en_passant_col != -1) {
-        // Determine the row where en passant captures can happen
-        // White pawns on row 4 can capture en passant, Black pawns on row 3 can capture
-        int en_passant_row = (piece.color == Color::White) ? 4 : 3;
-        
-        // Check if our pawn is on the correct row for en passant
-        if (row == en_passant_row) {
-            // Check if the en passant column is adjacent to our pawn (left or right)
+    // An en passant opportunity exists iff a target square is set
+    if (board.en_passant_row != -1 && board.en_passant_col != -1) {
+        // Our pawn must land diagonally on the en passant target square
+        if (next_row == board.en_passant_row) {
             for (int capture_col : capture_cols) {
                 if (capture_col == board.en_passant_col) {
-                    // The en passant column is adjacent to our pawn
-                    // Verify there's an enemy pawn in the en passant position
-                    // The enemy pawn is on the same row as our pawn, in the en passant column
+                    // The captured pawn sits on the same row as the capturing pawn
                     const Piece& enemy_pawn = board.squares[row][board.en_passant_col];
-                    
-                    if (enemy_pawn.type == PieceType::Pawn && enemy_pawn.color != piece.color) {
-                        // Valid en passant capture! Add the move
-                        // The pawn moves diagonally forward to capture the enemy pawn
+
+                    if (enemy_pawn.type == PieceType::Pawn &&
+                        enemy_pawn.color != piece.color) {
                         moves.emplace_back(row, col, next_row, capture_col);
                     }
                 }
