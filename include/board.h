@@ -65,6 +65,7 @@ it stores:
 3. castling rights
 4. whose turn it was before the move
 5. en passant before the move
+6. whether the move was an en passant capture
 */
 
 struct Undo 
@@ -78,6 +79,9 @@ struct Undo
     Color side_to_move;
     // Save en passant state so we can restore it when undoing moves
     int en_passant_col;
+    // True iff the move being undone was an en passant capture.
+    // Needed because the captured pawn is not on the destination square.
+    bool was_en_passant = false;
 };
 
 Board make_starting_position();
