@@ -14,6 +14,7 @@ add_executable(chess-king
     4_select_best_move.cpp
     make_move.cpp
     5_generate_output.cpp
+    zobrist_h.cpp
 )
 
 target_include_directories(chess-king
