@@ -1,5 +1,6 @@
 #include "board.h"
 #include "move.h"
+#include "../zobrist_h.h"
 
 #include <fstream>
 #include <iostream>
@@ -150,6 +151,9 @@ int main(int argc, char* argv[]) {
     if (!parse_arguments(argc, argv, options)) {
         return 1;
     }
+
+    // Initialize Zobrist hash tables (required for future transposition table)
+    init_zobrist();
 
     std::cout << "chess-king running...\n";
     

@@ -13,6 +13,7 @@
 namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
+constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
 
 // DEBUG: verify make_move/unmake_move restore the board perfectly.
 // Enable by compiling with -DDEBUG_UNDO
@@ -163,10 +164,17 @@ bool is_capture_move(const Board& board, const move& m) {
  *  - stand_pat is the static evaluation if we stop right now.
  *  - if stand_pat >= beta -> fail-high cutoff.
  *  - otherwise, we try capture moves and update alpha.
+ *
+ * qs_depth limits how deep we search to prevent explosion in tactical positions.
  */
-int quiescence_search(Board& board, int alpha, int beta) {
+int quiescence_search(Board& board, int alpha, int beta, int qs_depth) {
     // 1) Static evaluation ("stand pat")
     int stand_pat = evaluate_for_current_player(board);
+
+    // 1b) If quiescence depth exhausted, return static evaluation
+    if (qs_depth <= 0) {
+        return stand_pat;
+    }
 
     // 2) If even standing still is too good, cutoff
     if (stand_pat >= beta) {
@@ -199,8 +207,8 @@ int quiescence_search(Board& board, int alpha, int beta) {
         Undo undo;
         make_move(board, m, undo);
 
-        // Negamax recursion: flip sign and window
-        int score = -quiescence_search(board, -beta, -alpha);
+        // Negamax recursion: flip sign and window, decrement depth
+        int score = -quiescence_search(board, -beta, -alpha, qs_depth - 1);
 
         // Restore board
         unmake_move(board, m, undo);
@@ -250,15 +258,16 @@ int negamax(Board& board, int depth, int alpha, int beta) {
     // BASE CASE
     // If depth is exhausted, switch to quiescence search (captures only)
     if (depth == 0) {
-        return quiescence_search(board, alpha, beta);
+        return quiescence_search(board, alpha, beta, MAX_QS_DEPTH);
     }
 
     // Generate all legal moves
     std::vector<move> legal_moves = generate_legal_moves(board);
 
     // Terminal node: checkmate or stalemate
+    // Pass depth so engine prefers faster checkmates
     if (legal_moves.empty()) {
-        return evaluate_terminal(board);
+        return evaluate_terminal(board, depth);
     }
 
         // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
