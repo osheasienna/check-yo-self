@@ -180,6 +180,33 @@ int main(int argc, char* argv[]) {
     constexpr int SEARCH_DEPTH = 4; // safer depth for now
     move best_move = find_best_move(board, SEARCH_DEPTH);
 
+    // SAFETY CHECK: Validate that best_move is actually in the legal moves list
+    // This prevents writing invalid moves that could cause the engine to lose
+    // This should never happen, but it's a critical safety check
+    bool is_legal = false;
+    for (const auto& legal_move : moves) {
+        // Compare all fields: from/to squares and promotion
+        if (legal_move.from_row == best_move.from_row &&
+            legal_move.from_col == best_move.from_col &&
+            legal_move.to_row == best_move.to_row &&
+            legal_move.to_col == best_move.to_col &&
+            legal_move.promotion == best_move.promotion) {
+            is_legal = true;
+            break;
+        }
+    }
+
+    if (!is_legal) {
+        std::cerr << "Warning: Best move " << move_to_uci(best_move) 
+                  << " is not in legal moves list! Using first legal move as fallback.\n";
+        if (!moves.empty()) {
+            best_move = moves.front();
+        } else {
+            std::cerr << "Fatal: No legal moves available!\n";
+            return 1;
+        }
+    }
+
     // 4. Write the move using move.h function
     if (!write_move_to_file(best_move, options.move_path)) {
         return 1;

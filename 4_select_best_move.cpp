@@ -336,6 +336,17 @@ move select_move(const Board& board, int depth) {
         return move(0, 0, 0, 0);
     }
 
+    // BUG FIX: Sort moves by MVV-LVA for better alpha-beta pruning efficiency
+    // This was missing - without sorting, alpha-beta is much less effective
+    // We use the same calculate_move_score() function that negamax() uses
+    // Good moves (captures, promotions) are tried first, leading to more cutoffs
+    std::sort(legal_moves.begin(), legal_moves.end(), 
+        [&board](const move& a, const move& b) {
+            // Sort in descending order (highest score first)
+            // Moves with higher scores will be searched first
+            return calculate_move_score(board, a) > calculate_move_score(board, b);
+        });
+
     // initialise best_move to the first move in the vector
     move best_move = legal_moves.front();
     // initialise best_score to the worst possible score
