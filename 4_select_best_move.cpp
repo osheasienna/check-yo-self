@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <algorithm>  // For std::sort to order moves
+#include <cmath>
 
 // implemented negamax with alpha-beta pruning
 // generate legal moves, simulate the move, evaluate the board, choose best score 
@@ -14,6 +15,95 @@ namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
 constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
+
+static bool is_valid_square(int row, int col) {
+    return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+}
+
+static bool is_attacked(const Board& board, int target_row, int target_col, Color by_color) {
+    // Pawn attacks
+    int pawn_dir = (by_color == Color::White) ? -1 : 1;
+    int attack_cols[] = {target_col - 1, target_col + 1};
+    for (int col : attack_cols) {
+        int row = target_row + pawn_dir;
+        if (is_valid_square(row, col)) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::Pawn && p.color == by_color) return true;
+        }
+    }
+
+    // Knight attacks
+    int knight_offsets[8][2] = {{2, 1}, {2, -1}, {-2, 1}, {-2, -1}, {1, 2}, {1, -2}, {-1, 2}, {-1, -2}};
+    for (auto& off : knight_offsets) {
+        int r = target_row + off[0];
+        int c = target_col + off[1];
+        if (is_valid_square(r, c)) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::Knight && p.color == by_color) return true;
+        }
+    }
+
+    // Diagonals (bishop/queen)
+    int diag_dirs[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+    for (auto& dir : diag_dirs) {
+        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
+            int r = target_row + dir[0] * dist;
+            int c = target_col + dir[1] * dist;
+            if (!is_valid_square(r, c)) break;
+            const Piece& p = board.squares[r][c];
+            if (p.type != PieceType::None) {
+                if (p.color == by_color && (p.type == PieceType::Bishop || p.type == PieceType::Queen)) return true;
+                break;
+            }
+        }
+    }
+
+    // Straights (rook/queen)
+    int straight_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (auto& dir : straight_dirs) {
+        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
+            int r = target_row + dir[0] * dist;
+            int c = target_col + dir[1] * dist;
+            if (!is_valid_square(r, c)) break;
+            const Piece& p = board.squares[r][c];
+            if (p.type != PieceType::None) {
+                if (p.color == by_color && (p.type == PieceType::Rook || p.type == PieceType::Queen)) return true;
+                break;
+            }
+        }
+    }
+
+    // King attacks (adjacent king)
+    int king_offsets[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+    for (auto& off : king_offsets) {
+        int r = target_row + off[0];
+        int c = target_col + off[1];
+        if (is_valid_square(r, c)) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::King && p.color == by_color) return true;
+        }
+    }
+
+    return false;
+}
+
+static bool is_in_check(const Board& board, Color color) {
+    int king_row = -1, king_col = -1;
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::King && p.color == color) {
+                king_row = r; king_col = c;
+                break;
+            }
+        }
+        if (king_row != -1) break;
+    }
+    if (king_row == -1) return false;
+
+    Color enemy = (color == Color::White) ? Color::Black : Color::White;
+    return is_attacked(board, king_row, king_col, enemy);
+}
 
 // DEBUG: verify make_move/unmake_move restore the board perfectly.
 // Enable by compiling with -DDEBUG_UNDO
@@ -117,7 +207,7 @@ bool is_capture_move(const Board& board, const move& m) {
     // Check if this is a promotion move
     // Promotions are very valuable, give them high priority
     if (m.promotion != NONE) {
-        return 900;  // High score for promotions
+        return 1000;  // High score for promotions
     }
     
     // Get the piece that is moving (the aggressor)
@@ -147,9 +237,36 @@ bool is_capture_move(const Board& board, const move& m) {
         int victim_value = MATERIAL_VALUES[static_cast<int>(PieceType::Pawn)];
         return 10 * victim_value - attacker_value;  // 10 * 100 - 100 = 900
     }
-    
+
+    // Quiet-moves
+    // These only matter when moves are otherwise equal (no capture/promo)
+    // Keep magnitudes small so move ordering still dominates
+
+    // Encourage castling (king moves 2 squares)
+    if (moving_piece.type == PieceType::King && std::abs(m.to_col - m.from_col) == 2) {
+        return 50;
+    }
+
+    // Discourage early king moves (non-castling)
+    if (moving_piece.type == PieceType::King) {
+        return -20;
+    }
+
+    // Discourage early rook moves a bit ( pointless before development)
+    if (moving_piece.type == PieceType::Rook) {
+        return -10;
+    }
+
+    // Encourage developing knights and bishops off the back rank
+    if (moving_piece.type == PieceType::Knight || moving_piece.type == PieceType::Bishop) {
+        // White back rank = row 0, Black back rank = row 7 in your board representation
+        if ((moving_piece.color == Color::White && m.from_row == 0) ||
+            (moving_piece.color == Color::Black && m.from_row == 7)) {
+            return 10;
+        }
+    }
+
     // Quiet move (no capture, no promotion)
-    // These moves get the lowest priority
     return 0;
 }
 
@@ -167,50 +284,70 @@ bool is_capture_move(const Board& board, const move& m) {
  *
  * qs_depth limits how deep we search to prevent explosion in tactical positions.
  */
-int quiescence_search(Board& board, int alpha, int beta, int qs_depth) {
-    // 1) Static evaluation ("stand pat")
+ int quiescence_search(Board& board, int alpha, int beta, int qs_depth) {
+    // If quiescence depth exhausted, return static eval
+    if (qs_depth <= 0) {
+        return evaluate_for_current_player(board);
+    }
+
+    // If side to move is in check, we MUST consider all legal evasions.
+    // Stand-pat is not legal while in check.
+    const bool in_check = is_in_check(board, board.side_to_move);
+    if (in_check) {
+        std::vector<move> moves = generate_legal_moves(board);
+
+        // If no legal moves, it's mate/stalemate
+        if (moves.empty()) {
+            return evaluate_terminal(board);
+        }
+
+        for (const move& m : moves) {
+#ifdef DEBUG_UNDO
+            const Board before = board;
+#endif
+            Undo undo;
+            make_move(board, m, undo);
+
+            int score = -quiescence_search(board, -beta, -alpha, qs_depth - 1);
+
+            unmake_move(board, m, undo);
+
+#ifdef DEBUG_UNDO
+            if (!boards_equal(board, before)) {
+                debug_abort_board_mismatch(m);
+            }
+#endif
+
+            if (score >= beta) return beta;
+            if (score > alpha) alpha = score;
+        }
+
+        return alpha;
+    }
+
+    // Normal quiescence: stand-pat + captures only
     int stand_pat = evaluate_for_current_player(board);
 
-    // 1b) If quiescence depth exhausted, return static evaluation
-    if (qs_depth <= 0) {
-        return stand_pat;
-    }
+    if (stand_pat >= beta) return beta;
+    if (stand_pat > alpha) alpha = stand_pat;
 
-    // 2) If even standing still is too good, cutoff
-    if (stand_pat >= beta) {
-        return beta;
-    }
-
-    // 3) Improve alpha with stand_pat if possible
-    if (stand_pat > alpha) {
-        alpha = stand_pat;
-    }
-
-    // 4) Generate legal moves and filter to captures
     std::vector<move> moves = generate_legal_moves(board);
 
-    // Terminal position (mate/stalemate)
     if (moves.empty()) {
         return evaluate_terminal(board);
     }
 
-    // 5) Only search capture moves
     for (const move& m : moves) {
-        if (!is_capture_move(board, m)) {
-            continue;
-        }
+        if (!is_capture_move(board, m)) continue;
 
 #ifdef DEBUG_UNDO
         const Board before = board;
 #endif
-        // Make the capture (in-place), keeping Undo info
         Undo undo;
         make_move(board, m, undo);
 
-        // Negamax recursion: flip sign and window, decrement depth
         int score = -quiescence_search(board, -beta, -alpha, qs_depth - 1);
 
-        // Restore board
         unmake_move(board, m, undo);
 
 #ifdef DEBUG_UNDO
@@ -219,18 +356,10 @@ int quiescence_search(Board& board, int alpha, int beta, int qs_depth) {
         }
 #endif
 
-        // Alpha-beta cutoff
-        if (score >= beta) {
-            return beta;
-        }
-
-        // Improve alpha
-        if (score > alpha) {
-            alpha = score;
-        }
+        if (score >= beta) return beta;
+        if (score > alpha) alpha = score;
     }
 
-    // 6) Best score found in this quiescence node
     return alpha;
 }
 
@@ -273,7 +402,7 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
     // This drastically improves alpha-beta pruning efficiency
     // Good moves (captures, promotions) are tried first, leading to more cutoffs
-    std::sort(legal_moves.begin(), legal_moves.end(), 
+    std::stable_sort(legal_moves.begin(), legal_moves.end(), 
         [&board](const move& a, const move& b) {
             // Sort in descending order (highest score first)
             // Moves with higher scores will be searched first
@@ -340,7 +469,7 @@ move select_move(const Board& board, int depth) {
     // This was missing - without sorting, alpha-beta is much less effective
     // We use the same calculate_move_score() function that negamax() uses
     // Good moves (captures, promotions) are tried first, leading to more cutoffs
-    std::sort(legal_moves.begin(), legal_moves.end(), 
+    std::stable_sort(legal_moves.begin(), legal_moves.end(), 
         [&board](const move& a, const move& b) {
             // Sort in descending order (highest score first)
             // Moves with higher scores will be searched first

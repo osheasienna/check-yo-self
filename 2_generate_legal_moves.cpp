@@ -79,95 +79,26 @@ bool is_attacked(const Board& board, int target_row, int target_col, Color by_co
 }
 
 bool is_in_check(const Board& board, Color color) {
-    // Find the king
     int king_row = -1, king_col = -1;
+
     for (int row = 0; row < BOARD_SIZE; ++row) {
         for (int col = 0; col < BOARD_SIZE; ++col) {
-            if (board.squares[row][col].type == PieceType::King && board.squares[row][col].color == color) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::King && p.color == color) {
                 king_row = row;
                 king_col = col;
+                row = BOARD_SIZE; // break outer loop
                 break;
             }
         }
-        if (king_row != -1) break;
     }
 
-    if (king_row == -1) return false; // Should not happen
+    if (king_row == -1) return false; // should never happen
 
-    // Check for attacks from enemy pieces
-    Color enemy_color = (color == Color::White) ? Color::Black : Color::White;
-
-    // 1. Pawn attacks
-    // White pawns capture at row+1 (from their perspective), so if I am White, enemy Black pawns are at row+1.
-    // If I am Black, enemy White pawns are at row-1.
-    int pawn_dir = (enemy_color == Color::White) ? -1 : 1; 
-    // Wait: White pawns move +1. So if enemy is White, they are at king_row-1 attacking king_row.
-    // If enemy is Black (move -1), they are at king_row+1 attacking king_row.
-    
-    int attack_cols[] = {king_col - 1, king_col + 1};
-    for (int col : attack_cols) {
-        int row = king_row + pawn_dir; 
-        if (is_valid_square(row, col)) {
-            const Piece& p = board.squares[row][col];
-            if (p.type == PieceType::Pawn && p.color == enemy_color) return true;
-        }
-    }
-
-    // 2. Knight attacks
-    int knight_offsets[8][2] = {{2, 1}, {2, -1}, {-2, 1}, {-2, -1}, {1, 2}, {1, -2}, {-1, 2}, {-1, -2}};
-    for (auto& offset : knight_offsets) {
-        int r = king_row + offset[0];
-        int c = king_col + offset[1];
-        if (is_valid_square(r, c)) {
-            const Piece& p = board.squares[r][c];
-            if (p.type == PieceType::Knight && p.color == enemy_color) return true;
-        }
-    }
-
-    // 3. Sliding pieces (Bishop, Rook, Queen)
-    // Diagonals (Bishop, Queen)
-    int diag_dirs[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-    for (auto& dir : diag_dirs) {
-        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
-            int r = king_row + dir[0] * dist;
-            int c = king_col + dir[1] * dist;
-            if (!is_valid_square(r, c)) break;
-            const Piece& p = board.squares[r][c];
-            if (p.type != PieceType::None) {
-                if (p.color == enemy_color && (p.type == PieceType::Bishop || p.type == PieceType::Queen)) return true;
-                break; // Blocked
-            }
-        }
-    }
-
-    // Straights (Rook, Queen)
-    int straight_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (auto& dir : straight_dirs) {
-        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
-            int r = king_row + dir[0] * dist;
-            int c = king_col + dir[1] * dist;
-            if (!is_valid_square(r, c)) break;
-            const Piece& p = board.squares[r][c];
-            if (p.type != PieceType::None) {
-                if (p.color == enemy_color && (p.type == PieceType::Rook || p.type == PieceType::Queen)) return true;
-                break; // Blocked
-            }
-        }
-    }
-
-    // 4. King attacks (adjacent enemy king)
-    int king_offsets[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-    for (auto& offset : king_offsets) {
-        int r = king_row + offset[0];
-        int c = king_col + offset[1];
-        if (is_valid_square(r, c)) {
-            const Piece& p = board.squares[r][c];
-            if (p.type == PieceType::King && p.color == enemy_color) return true;
-        }
-    }
-
-    return false;
+    Color enemy = (color == Color::White) ? Color::Black : Color::White;
+    return is_attacked(board, king_row, king_col, enemy);
 }
+
 
 // Helper to add move if square is empty or has enemy piece. Returns true if square was blocked (by friend or enemy).
 bool add_move_if_valid(const Board& board, int from_row, int from_col, int to_row, int to_col, std::vector<move>& moves) {
@@ -307,79 +238,64 @@ void generate_castling_moves(Board& board, int row, int col, std::vector<move>& 
     Color color = king.color;
     int back_rank = (color == Color::White) ? 0 : 7;
 
+    // King must be on starting square e-file
     if (row != back_rank || col != 4) return;
 
-    bool can_kingside = (color == Color::White ? board.white_can_castle_kingside : board.black_can_castle_kingside);
+    Color enemy = (color == Color::White) ? Color::Black : Color::White;
 
-    if (can_kingside )
-    {
-        if (board.squares[back_rank][5].type == PieceType::None && board.squares[back_rank][6].type == PieceType::None)
-        {
+    // Can't castle out of check
+    if (is_attacked(board, back_rank, 4, enemy)) return;
+
+    // Kingside
+    bool can_kingside = (color == Color::White)
+        ? board.white_can_castle_kingside
+        : board.black_can_castle_kingside;
+
+    if (can_kingside) {
+        // Squares between king and rook must be empty: f, g
+        if (board.squares[back_rank][5].type == PieceType::None &&
+            board.squares[back_rank][6].type == PieceType::None) {
+
+            // Rook must be on h-file
             const Piece& rook = board.squares[back_rank][7];
-            if(rook.type == PieceType::Rook && rook.color == color)
-            {
-                Undo u1;
+            if (rook.type == PieceType::Rook && rook.color == color) {
 
-                make_move(board, move(back_rank, 4, back_rank, 5, NONE), u1);
+                // Can't pass through or land on attacked squares
+                if (!is_attacked(board, back_rank, 5, enemy) &&
+                    !is_attacked(board, back_rank, 6, enemy)) {
 
-                bool check1 = !is_in_check(board, color);
-
-                Undo u2;
-                bool check2 = false;
-
-                if(check1)
-                {
-                    make_move(board, move(back_rank, 5, back_rank, 6, NONE), u2);
-                    check2 = !is_in_check(board, color);
-                    unmake_move(board, move(back_rank, 5, back_rank, 6, NONE), u2);
-                }
-
-                unmake_move(board, move(back_rank, 4, back_rank, 5, NONE), u1);
-
-                if (check1 && check2)
-                {
                     moves.emplace_back(back_rank, 4, back_rank, 6, NONE);
                 }
             }
         }
     }
 
-    bool can_queenside = (color == Color:: White ? board.white_can_castle_queenside : board.black_can_castle_queenside);
+    // Queenside
+    bool can_queenside = (color == Color::White)
+        ? board.white_can_castle_queenside
+        : board.black_can_castle_queenside;
 
-    if (can_queenside)
-    {
-        if (board.squares[back_rank][3].type == PieceType::None && board.squares[back_rank][2].type == PieceType::None &&
-        board.squares[back_rank][1].type == PieceType::None)
-        {
+    if (can_queenside) {
+        // Squares between king and rook must be empty: d, c, b
+        if (board.squares[back_rank][3].type == PieceType::None &&
+            board.squares[back_rank][2].type == PieceType::None &&
+            board.squares[back_rank][1].type == PieceType::None) {
+
+            // Rook must be on a-file
             const Piece& rook = board.squares[back_rank][0];
-            if (rook.type == PieceType::Rook && rook.color == color)
-            {
-                Undo u1;
-                make_move(board, move(back_rank, 4, back_rank, 3, NONE), u1);
-                bool check1 = !is_in_check(board, color);
+            if (rook.type == PieceType::Rook && rook.color == color) {
 
-                Undo u2;
-                bool check2 = false;
+                // Can't pass through or land on attacked squares
+                if (!is_attacked(board, back_rank, 3, enemy) &&
+                    !is_attacked(board, back_rank, 2, enemy)) {
 
-                if(check1)
-                {
-                    make_move(board, move(back_rank, 3, back_rank, 2, NONE), u2);
-                    check2 = !is_in_check(board,color);
-
-                    unmake_move(board, move(back_rank, 3, back_rank, 2, NONE), u2);
-                }
-
-                unmake_move(board, move(back_rank, 4, back_rank, 3, NONE), u1);
-
-                if (check1 && check2)
-                {
                     moves.emplace_back(back_rank, 4, back_rank, 2, NONE);
                 }
             }
-
         }
     }
 }
+
 
 
 void generate_king_moves(Board& board, int row, int col, std::vector<move>& moves) {
