@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <cstdint>
 
 // forward declarations for functions in other files
 extern Board make_starting_position();
@@ -15,6 +16,11 @@ extern void make_move(Board& board, const move& m);
 
 // from 4_select_best_move.cpp
 extern move find_best_move(const Board& board, int depth);
+
+// Repetition detection functions from 4_select_best_move.cpp
+extern void add_position_to_history(std::uint64_t hash);
+extern void clear_position_history();
+extern size_t get_position_history_size();
 
 // from 5_generate_output.cpp
 std::string move_to_uci(move m);
@@ -114,9 +120,14 @@ namespace {
     }
 
     // parse history file and reconstruct board state
+    // ALSO tracks all positions in history for threefold repetition detection
     Board parse_history(const std::string& history_path) {
         Board board = make_starting_position();
         std::ifstream history_file(history_path);
+        
+        // Clear any previous position history and add starting position
+        clear_position_history();
+        add_position_to_history(compute_zobrist(board));
         
         if (!history_file.is_open()) {
             std::cerr << "Warning: History file not found. Assuming starting position.\n";
@@ -137,8 +148,15 @@ namespace {
                 move m = parse_move(line);
                 // Replay the move
                 make_move(board, m);
+                
+                // REPETITION TRACKING: Store position hash after each move
+                // This builds the history of all positions in the game
+                // so we can detect threefold repetition
+                add_position_to_history(compute_zobrist(board));
             }
         }
+        
+        std::cerr << "Position history: " << get_position_history_size() << " positions tracked\n";
         
         return board;
     }

@@ -1,12 +1,56 @@
 #include "board.h"
+#include "../zobrist_h.h"
 #include <vector>
 #include <iostream>
 #include <cstdlib>
 #include <algorithm>  // For std::sort to order moves
 #include <cmath>
+#include <cstdint>
 
 // implemented negamax with alpha-beta pruning
 // generate legal moves, simulate the move, evaluate the board, choose best score 
+
+// ============================================================================
+// REPETITION DETECTION - Prevents threefold repetition draws
+// ============================================================================
+// We store Zobrist hashes of all positions that occurred in the game.
+// If a position appears 3 times, it's a draw. We also treat 2 repetitions
+// as a "likely draw" in the search to discourage repeating positions.
+// ============================================================================
+
+// Global history of positions (hashes) from the game
+static std::vector<std::uint64_t> g_position_history;
+
+// Count how many times a hash appears in history
+static int count_repetitions(std::uint64_t hash) {
+    int count = 0;
+    for (std::uint64_t h : g_position_history) {
+        if (h == hash) count++;
+    }
+    return count;
+}
+
+// Add a position to history (called when parsing game history and during search)
+void add_position_to_history(std::uint64_t hash) {
+    g_position_history.push_back(hash);
+}
+
+// Remove the last position from history (for undoing moves in search)
+void remove_last_position_from_history() {
+    if (!g_position_history.empty()) {
+        g_position_history.pop_back();
+    }
+}
+
+// Clear all position history (called at start of new game)
+void clear_position_history() {
+    g_position_history.clear();
+}
+
+// Get current history size (for debugging)
+size_t get_position_history_size() {
+    return g_position_history.size();
+}
 
 // namespace for local functions
 // prevents other files from calling negamax(), select_move(), find_best_move() directly
@@ -15,6 +59,7 @@ namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
 constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
+constexpr int DRAW_SCORE = 0;    // Score for draw by repetition
 
 static bool is_valid_square(int row, int col) {
     return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
@@ -399,7 +444,7 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         return evaluate_terminal(board, depth);
     }
 
-        // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
+    // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
     // This drastically improves alpha-beta pruning efficiency
     // Good moves (captures, promotions) are tried first, leading to more cutoffs
     std::stable_sort(legal_moves.begin(), legal_moves.end(), 
@@ -420,8 +465,35 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         Undo undo;
         make_move(board, candidate, undo);
 
-        // Negamax recursion with flipped alpha/beta window
-        int score = -negamax(board, depth - 1, -beta, -alpha);
+        // REPETITION DETECTION: Check if this position has been seen before
+        // Compute hash of the new position and check history
+        std::uint64_t pos_hash = compute_zobrist(board);
+        int repetition_count = count_repetitions(pos_hash);
+        
+        int score;
+        if (repetition_count >= 2) {
+            // Position would appear 3+ times = forced draw
+            // Return draw score (0) - neither good nor bad
+            score = -DRAW_SCORE;  // Negated because we're in opponent's perspective
+        } else if (repetition_count == 1) {
+            // Position has been seen once before
+            // Discourage but don't force-avoid (might be acceptable in some cases)
+            // Still search but with a small penalty toward draw
+            add_position_to_history(pos_hash);
+            score = -negamax(board, depth - 1, -beta, -alpha);
+            remove_last_position_from_history();
+            
+            // Blend toward draw score slightly to discourage repetition
+            // This makes the engine prefer non-repeating moves when scores are close
+            if (score > DRAW_SCORE) {
+                score = score - 10;  // Small penalty for potential repetition
+            }
+        } else {
+            // New position, search normally
+            add_position_to_history(pos_hash);
+            score = -negamax(board, depth - 1, -beta, -alpha);
+            remove_last_position_from_history();
+        }
 
         // Undo move to restore previous board state
         unmake_move(board, candidate, undo);
@@ -496,10 +568,32 @@ move select_move(const Board& board, int depth) {
         // apply candidate move to the copy
         // next_board = new position after we play candidate move
         make_move(temp, candidate, undo);
-        // call the recursive negamax search on resulting position
-        // next_board = child position (DEPTH - 1)
-        // -alpha and -beta to flip for the opponent
-        int score = -negamax(temp, depth - 1, -beta, -alpha);
+        
+        // REPETITION DETECTION at root level
+        // Check if this move leads to a repeated position
+        std::uint64_t pos_hash = compute_zobrist(temp);
+        int repetition_count = count_repetitions(pos_hash);
+        
+        int score;
+        if (repetition_count >= 2) {
+            // This move would cause threefold repetition = draw
+            // Give it a draw score (0) - only pick if no better move exists
+            score = -DRAW_SCORE;
+            std::cerr << "Note: Move leads to repetition, score=0\n";
+        } else {
+            // Track this position during search
+            add_position_to_history(pos_hash);
+            // call the recursive negamax search on resulting position
+            // next_board = child position (DEPTH - 1)
+            // -alpha and -beta to flip for the opponent
+            score = -negamax(temp, depth - 1, -beta, -alpha);
+            remove_last_position_from_history();
+            
+            // Small penalty for moves that repeat once (not fatal, but discouraged)
+            if (repetition_count == 1 && score > DRAW_SCORE) {
+                score = score - 15;  // Discourage repetition even if score is good
+            }
+        }
 
         unmake_move(temp, candidate, undo);
 
