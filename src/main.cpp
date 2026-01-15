@@ -1,5 +1,6 @@
 #include "board.h"
 #include "move.h"
+#include "openings.h"
 #include "../zobrist_h.h"
 
 #include <fstream>
@@ -15,7 +16,7 @@ extern std::vector<move> generate_legal_moves(const Board& board);
 extern void make_move(Board& board, const move& m);
 
 // from 4_select_best_move.cpp
-extern move find_best_move(const Board& board, int depth);
+extern move find_best_move(const Board& board, int max_depth, int time_limit_ms);
 
 // Repetition detection functions from 4_select_best_move.cpp
 extern void add_position_to_history(std::uint64_t hash);
@@ -122,7 +123,7 @@ namespace {
 
     // parse history file and reconstruct board state
     // ALSO tracks all positions in history for threefold repetition detection
-    Board parse_history(const std::string& history_path) {
+    Board parse_history(const std::string& history_path, std::vector<std::string>& move_history) {
         Board board = make_starting_position();
         std::ifstream history_file(history_path);
         
@@ -146,6 +147,7 @@ namespace {
             }
 
             if (!line.empty()) {
+                move_history.push_back(line); 
                 move m = parse_move(line);
                 
                 // VALIDATION: Check that the move is legal before applying
@@ -198,7 +200,8 @@ int main(int argc, char* argv[]) {
     std::cout << "chess-king running...\n";
     
     // 1. Parse history and reconstruct board state
-    Board board = parse_history(options.history_path);
+    std::vector<std::string> move_history;
+    Board board = parse_history(options.history_path, move_history);
     
     // Display board state for verification (helps verify history was loaded correctly)
     print_board(board);
@@ -219,9 +222,24 @@ int main(int argc, char* argv[]) {
     // 3. Search for the best move using Negamax with time control
     // Iterative deepening: starts at depth 1, increases until time runs out
     // TIME_LIMIT_MS: Stay well under tournament time limit to prevent timeouts
-    constexpr int MAX_SEARCH_DEPTH = 6;  // Maximum depth to search
-    constexpr int TIME_LIMIT_MS = 800;   // 800ms limit - stay under 1 second
-    move best_move = find_best_move(board, MAX_SEARCH_DEPTH, TIME_LIMIT_MS);
+    // Check opening book FIRST before searching
+    move best_move(0, 0, 0, 0);
+    move book_move = get_book_move(move_history);
+
+    // Check if book move is valid (not 0,0,0,0)
+    bool have_book_move = (book_move.from_row != 0 || book_move.from_col != 0 || 
+                        book_move.to_row != 0 || book_move.to_col != 0);
+
+    if (have_book_move) {
+        // We have a book move! Use it instantly
+        std::cout << "Playing opening book move!\n";
+        best_move = book_move;
+    } else {
+        // Not in book - search for best move using Negamax with time control
+        constexpr int MAX_SEARCH_DEPTH = 6;
+        constexpr int TIME_LIMIT_MS = 800;
+        best_move = find_best_move(board, MAX_SEARCH_DEPTH, TIME_LIMIT_MS);
+    }
 
     // SAFETY CHECK: Validate that best_move is actually in the legal moves list
     // This prevents writing invalid moves that could cause the engine to lose
