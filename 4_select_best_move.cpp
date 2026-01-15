@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <chrono>        // For time management
 #include <unordered_map> // For O(1) repetition detection
+#include "attacks.h"
 
 // implemented negamax with alpha-beta pruning
 // generate legal moves, simulate the move, evaluate the board, choose best score
@@ -112,95 +113,6 @@ constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
 constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
 constexpr int DRAW_SCORE = 0;    // Score for draw by repetition
-
-static bool is_valid_square(int row, int col) {
-    return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
-}
-
-static bool is_attacked(const Board& board, int target_row, int target_col, Color by_color) {
-    // Pawn attacks
-    int pawn_dir = (by_color == Color::White) ? -1 : 1;
-    int attack_cols[] = {target_col - 1, target_col + 1};
-    for (int col : attack_cols) {
-        int row = target_row + pawn_dir;
-        if (is_valid_square(row, col)) {
-            const Piece& p = board.squares[row][col];
-            if (p.type == PieceType::Pawn && p.color == by_color) return true;
-        }
-    }
-
-    // Knight attacks
-    int knight_offsets[8][2] = {{2, 1}, {2, -1}, {-2, 1}, {-2, -1}, {1, 2}, {1, -2}, {-1, 2}, {-1, -2}};
-    for (auto& off : knight_offsets) {
-        int r = target_row + off[0];
-        int c = target_col + off[1];
-        if (is_valid_square(r, c)) {
-            const Piece& p = board.squares[r][c];
-            if (p.type == PieceType::Knight && p.color == by_color) return true;
-        }
-    }
-
-    // Diagonals (bishop/queen)
-    int diag_dirs[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-    for (auto& dir : diag_dirs) {
-        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
-            int r = target_row + dir[0] * dist;
-            int c = target_col + dir[1] * dist;
-            if (!is_valid_square(r, c)) break;
-            const Piece& p = board.squares[r][c];
-            if (p.type != PieceType::None) {
-                if (p.color == by_color && (p.type == PieceType::Bishop || p.type == PieceType::Queen)) return true;
-                break;
-            }
-        }
-    }
-
-    // Straights (rook/queen)
-    int straight_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (auto& dir : straight_dirs) {
-        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
-            int r = target_row + dir[0] * dist;
-            int c = target_col + dir[1] * dist;
-            if (!is_valid_square(r, c)) break;
-            const Piece& p = board.squares[r][c];
-            if (p.type != PieceType::None) {
-                if (p.color == by_color && (p.type == PieceType::Rook || p.type == PieceType::Queen)) return true;
-                break;
-            }
-        }
-    }
-
-    // King attacks (adjacent king)
-    int king_offsets[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
-    for (auto& off : king_offsets) {
-        int r = target_row + off[0];
-        int c = target_col + off[1];
-        if (is_valid_square(r, c)) {
-            const Piece& p = board.squares[r][c];
-            if (p.type == PieceType::King && p.color == by_color) return true;
-        }
-    }
-
-    return false;
-}
-
-static bool is_in_check(const Board& board, Color color) {
-    int king_row = -1, king_col = -1;
-    for (int r = 0; r < BOARD_SIZE; ++r) {
-        for (int c = 0; c < BOARD_SIZE; ++c) {
-            const Piece& p = board.squares[r][c];
-            if (p.type == PieceType::King && p.color == color) {
-                king_row = r; king_col = c;
-                break;
-            }
-        }
-        if (king_row != -1) break;
-    }
-    if (king_row == -1) return false;
-
-    Color enemy = (color == Color::White) ? Color::Black : Color::White;
-    return is_attacked(board, king_row, king_col, enemy);
-}
 
 // DEBUG: verify make_move/unmake_move restore the board perfectly.
 // Enable by compiling with -DDEBUG_UNDO
