@@ -98,6 +98,10 @@ std::vector<move> generate_legal_moves(const Board& board);
 int evaluate_board(const Board& board);
 int evaluate_terminal(const Board& board);
 int evaluate_terminal(const Board& board, int depth);  // Depth-adjusted for faster mates
+
+// Time-managed search with iterative deepening
+move find_best_move(const Board& board, int max_depth, int time_limit_ms);
+// Backward-compatible overload (no time limit)
 move find_best_move(const Board& board, int depth);
 
 #endif // BOARD_H

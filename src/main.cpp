@@ -194,9 +194,12 @@ int main(int argc, char* argv[]) {
         return 0; // safely exit
     }
     
-    // 3. Search for the best move using Negamax
-    constexpr int SEARCH_DEPTH = 4; // safer depth for now
-    move best_move = find_best_move(board, SEARCH_DEPTH);
+    // 3. Search for the best move using Negamax with time control
+    // Iterative deepening: starts at depth 1, increases until time runs out
+    // TIME_LIMIT_MS: Stay well under tournament time limit to prevent timeouts
+    constexpr int MAX_SEARCH_DEPTH = 6;  // Maximum depth to search
+    constexpr int TIME_LIMIT_MS = 800;   // 800ms limit - stay under 1 second
+    move best_move = find_best_move(board, MAX_SEARCH_DEPTH, TIME_LIMIT_MS);
 
     // SAFETY CHECK: Validate that best_move is actually in the legal moves list
     // This prevents writing invalid moves that could cause the engine to lose

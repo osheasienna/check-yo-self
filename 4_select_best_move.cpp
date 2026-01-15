@@ -6,45 +6,97 @@
 #include <algorithm>  // For std::sort to order moves
 #include <cmath>
 #include <cstdint>
+#include <chrono>        // For time management
+#include <unordered_map> // For O(1) repetition detection
 
 // implemented negamax with alpha-beta pruning
-// generate legal moves, simulate the move, evaluate the board, choose best score 
+// generate legal moves, simulate the move, evaluate the board, choose best score
 
 // ============================================================================
-// REPETITION DETECTION - Prevents threefold repetition draws
+// TIME MANAGEMENT - Prevents timeouts by checking elapsed time during search
+// ============================================================================
+// The engine uses iterative deepening with time control:
+// - Start with depth 1, increase depth after each completed search
+// - Check time periodically during search and abort if time runs out
+// - Always return the best move found so far
+// ============================================================================
+
+static std::chrono::steady_clock::time_point g_search_start;
+static int g_time_limit_ms = 0;
+static bool g_search_aborted = false;
+
+// Initialize time limit for search
+void set_time_limit(int ms) {
+    g_search_start = std::chrono::steady_clock::now();
+    g_time_limit_ms = ms;
+    g_search_aborted = false;
+}
+
+// Check if time limit has been exceeded
+bool time_is_up() {
+    if (g_time_limit_ms <= 0) return false;  // No time limit set
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_search_start).count();
+    return elapsed >= g_time_limit_ms;
+}
+
+// Check if search was aborted due to timeout
+bool search_was_aborted() {
+    return g_search_aborted;
+} 
+
+// ============================================================================
+// REPETITION DETECTION - Prevents threefold repetition draws (O(1) lookup)
 // ============================================================================
 // We store Zobrist hashes of all positions that occurred in the game.
 // If a position appears 3 times, it's a draw. We also treat 2 repetitions
 // as a "likely draw" in the search to discourage repeating positions.
+//
+// OPTIMIZATION: Uses unordered_map for O(1) count lookup instead of O(n) scan.
+// The vector maintains order for push/pop operations during search.
 // ============================================================================
 
-// Global history of positions (hashes) from the game
+// Global history of positions (hashes) from the game - maintains order for undo
 static std::vector<std::uint64_t> g_position_history;
+// Hash count map for O(1) repetition counting
+static std::unordered_map<std::uint64_t, int> g_position_count;
 
-// Count how many times a hash appears in history
+// Count how many times a hash appears in history - O(1) lookup
 static int count_repetitions(std::uint64_t hash) {
-    int count = 0;
-    for (std::uint64_t h : g_position_history) {
-        if (h == hash) count++;
+    auto it = g_position_count.find(hash);
+    if (it != g_position_count.end()) {
+        return it->second;
     }
-    return count;
+    return 0;
 }
 
 // Add a position to history (called when parsing game history and during search)
 void add_position_to_history(std::uint64_t hash) {
     g_position_history.push_back(hash);
+    g_position_count[hash]++;
 }
 
 // Remove the last position from history (for undoing moves in search)
 void remove_last_position_from_history() {
     if (!g_position_history.empty()) {
+        std::uint64_t hash = g_position_history.back();
         g_position_history.pop_back();
+        
+        // Decrement count in map
+        auto it = g_position_count.find(hash);
+        if (it != g_position_count.end()) {
+            it->second--;
+            if (it->second <= 0) {
+                g_position_count.erase(it);  // Clean up zero-count entries
+            }
+        }
     }
 }
 
 // Clear all position history (called at start of new game)
 void clear_position_history() {
     g_position_history.clear();
+    g_position_count.clear();
 }
 
 // Get current history size (for debugging)
@@ -330,6 +382,12 @@ bool is_capture_move(const Board& board, const move& m) {
  * qs_depth limits how deep we search to prevent explosion in tactical positions.
  */
  int quiescence_search(Board& board, int alpha, int beta, int qs_depth) {
+    // TIME CHECK: Abort search if time limit exceeded
+    if (time_is_up()) {
+        g_search_aborted = true;
+        return evaluate_for_current_player(board);  // Return current eval
+    }
+
     // If quiescence depth exhausted, return static eval
     if (qs_depth <= 0) {
         return evaluate_for_current_player(board);
@@ -429,6 +487,12 @@ bool is_capture_move(const Board& board, const move& m) {
 // ALPHA: best score for the current player
 // BETA: best score for the opponent
 int negamax(Board& board, int depth, int alpha, int beta) {
+    // TIME CHECK: Abort search if time limit exceeded
+    if (time_is_up()) {
+        g_search_aborted = true;
+        return 0;  // Return immediately with neutral score
+    }
+
     // BASE CASE
     // If depth is exhausted, switch to quiescence search (captures only)
     if (depth == 0) {
@@ -559,6 +623,12 @@ move select_move(const Board& board, int depth) {
 
     // loop through each legal move
     for (const auto& candidate : legal_moves) {
+        // TIME CHECK: Abort search if time limit exceeded
+        if (time_is_up()) {
+            g_search_aborted = true;
+            break;  // Return best move found so far
+        }
+
         Board temp = board;
 #ifdef DEBUG_UNDO
         const Board before = temp;
@@ -620,17 +690,58 @@ move select_move(const Board& board, int depth) {
 
 } // namespace
 
-// FIND_BEST_MOVE FUNCTION
+// FIND_BEST_MOVE FUNCTION WITH ITERATIVE DEEPENING AND TIME CONTROL
 // BOARD: current board position
-// DEPTH: number of moves to look ahead
+// MAX_DEPTH: maximum number of moves to look ahead
+// TIME_LIMIT_MS: time limit in milliseconds (0 = no limit)
 // returns the best move for the current player
-// start with first move as deault, replace if a better move is found
-move find_best_move(const Board& board, int depth) {
+// Uses iterative deepening: searches depth 1, then 2, etc. until time runs out
+// Always returns a valid move (at minimum, depth 1 result or first legal move)
+move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
+    // Initialize time control
+    set_time_limit(time_limit_ms);
+    
     // CHECK if depth is valid
-    // DEPTH = 0 makes engine simply evaluate the current position with no move selection
-    if (depth < 1) {
-        depth = 1;
+    if (max_depth < 1) {
+        max_depth = 1;
     }
-    // call the select_move function to get the best move
-    return select_move(board, depth);
+    
+    // Generate legal moves first to have a fallback
+    std::vector<move> legal_moves = generate_legal_moves(board);
+    if (legal_moves.empty()) {
+        return move(0, 0, 0, 0);  // No legal moves (checkmate/stalemate)
+    }
+    
+    // Always have a fallback move (first legal move)
+    move best_move = legal_moves.front();
+    
+    // ITERATIVE DEEPENING: Start at depth 1, increase until time runs out or max depth reached
+    // This ensures we always have a valid move to return
+    for (int depth = 1; depth <= max_depth; ++depth) {
+        // Check time before starting new depth
+        if (time_is_up()) {
+            std::cerr << "Time limit reached before depth " << depth << "\n";
+            break;
+        }
+        
+        // Search at current depth
+        move current_best = select_move(board, depth);
+        
+        // Only update best move if search completed without timeout
+        if (!g_search_aborted) {
+            best_move = current_best;
+            std::cerr << "Completed depth " << depth << "\n";
+        } else {
+            std::cerr << "Search aborted at depth " << depth << "\n";
+            break;  // Stop iterating if search was aborted
+        }
+    }
+    
+    return best_move;
+}
+
+// Backward-compatible overload for existing code
+move find_best_move(const Board& board, int depth) {
+    // No time limit - use original behavior
+    return find_best_move(board, depth, 0);
 }
