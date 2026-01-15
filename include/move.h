@@ -20,6 +20,9 @@ struct move {
     int to_col;
     promotion_piece_type promotion;
 
+    // Default constructor needed for transposition table entries
+    move() : from_row(0), from_col(0), to_row(0), to_col(0), promotion(NONE) {}
+    
     move(int from_r, int from_c, int to_r, int to_c, promotion_piece_type promo = NONE)
         : from_row(from_r), from_col(from_c), to_row(to_r), to_col(to_c), promotion(promo) {}
 };

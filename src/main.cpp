@@ -69,6 +69,7 @@ namespace {
     // Convert notation like "e2e4" to move struct
     move parse_move(const std::string& move_str) {
         if (move_str.length() < 4) {
+            std::cerr << "Warning: Invalid move string '" << move_str << "' (too short)\n";
             return move(0, 0, 0, 0); // Invalid
         }
         int from_col = move_str[0] - 'a';
@@ -146,6 +147,27 @@ namespace {
 
             if (!line.empty()) {
                 move m = parse_move(line);
+                
+                // VALIDATION: Check that the move is legal before applying
+                // This catches history file corruption or format mismatches
+                std::vector<move> legal = generate_legal_moves(board);
+                bool is_valid = false;
+                for (const auto& lm : legal) {
+                    if (lm.from_row == m.from_row && lm.from_col == m.from_col &&
+                        lm.to_row == m.to_row && lm.to_col == m.to_col &&
+                        lm.promotion == m.promotion) {
+                        is_valid = true;
+                        break;
+                    }
+                }
+                
+                if (!is_valid) {
+                    std::cerr << "ERROR: Illegal move in history file: '" << line << "'\n";
+                    std::cerr << "  Parsed as: (" << m.from_row << "," << m.from_col 
+                              << ")->(" << m.to_row << "," << m.to_col << ")\n";
+                    // Continue anyway to see full error output
+                }
+                
                 // Replay the move
                 make_move(board, m);
                 

@@ -1,5 +1,6 @@
 #include "board.h"
 #include "../zobrist_h.h"
+#include "../t_table.h"   // Transposition table for caching positions
 #include <vector>
 #include <iostream>
 #include <cstdlib>
@@ -9,6 +10,20 @@
 #include <chrono>        // For time management
 #include <unordered_map> // For O(1) repetition detection
 #include "attacks.h"
+
+// ============================================================================
+// TRANSPOSITION TABLE - Caches evaluated positions for faster search
+// ============================================================================
+// The TT stores positions we've already evaluated so we don't re-evaluate them.
+// This dramatically speeds up iterative deepening and positions reached via
+// different move orders (transpositions).
+// ============================================================================
+static TranspositionTable g_tt(64);  // 64 MB transposition table
+
+// Clear the transposition table (call between games if needed)
+void clear_transposition_table() {
+    g_tt.clear();
+}
 
 // implemented negamax with alpha-beta pruning
 // generate legal moves, simulate the move, evaluate the board, choose best score
@@ -411,6 +426,43 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         return quiescence_search(board, alpha, beta, MAX_QS_DEPTH);
     }
 
+    // Save original alpha for determining TT bound type later
+    const int original_alpha = alpha;
+    
+    // =========================================================================
+    // TRANSPOSITION TABLE PROBE
+    // =========================================================================
+    // Check if we've seen this position before at sufficient depth
+    std::uint64_t pos_hash = compute_zobrist(board);
+    TTentry* tt_entry = g_tt.probe(pos_hash);
+    move tt_move;  // Best move from TT (for move ordering)
+    bool has_tt_move = false;
+    
+    if (tt_entry != nullptr && tt_entry->depth >= depth) {
+        // We have a cached result at sufficient depth
+        if (tt_entry->flag == TT_EXACT) {
+            // Exact score - can return immediately
+            return tt_entry->value;
+        } else if (tt_entry->flag == TT_LOWER) {
+            // Lower bound - raise alpha if possible
+            alpha = std::max(alpha, tt_entry->value);
+        } else if (tt_entry->flag == TT_UPPER) {
+            // Upper bound - lower beta if possible
+            beta = std::min(beta, tt_entry->value);
+        }
+        
+        // Check for cutoff from TT bounds
+        if (alpha >= beta) {
+            return tt_entry->value;
+        }
+    }
+    
+    // Extract TT best move for move ordering (even if depth was insufficient)
+    if (tt_entry != nullptr && tt_entry->has_move) {
+        tt_move = tt_entry->best_move;
+        has_tt_move = true;
+    }
+
     // Generate all legal moves
     std::vector<move> legal_moves = generate_legal_moves(board);
 
@@ -420,17 +472,34 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         return evaluate_terminal(board, depth);
     }
 
-    // MOVE ORDERING: Sort moves by score (highest first) using MVV-LVA heuristic
-    // This drastically improves alpha-beta pruning efficiency
-    // Good moves (captures, promotions) are tried first, leading to more cutoffs
-    std::stable_sort(legal_moves.begin(), legal_moves.end(), 
+    // =========================================================================
+    // MOVE ORDERING: TT move first, then MVV-LVA
+    // =========================================================================
+    // The TT move (if valid) is likely the best move from previous search
+    if (has_tt_move) {
+        // Find and move TT move to front if it's in the legal moves list
+        for (size_t i = 0; i < legal_moves.size(); ++i) {
+            if (legal_moves[i].from_row == tt_move.from_row &&
+                legal_moves[i].from_col == tt_move.from_col &&
+                legal_moves[i].to_row == tt_move.to_row &&
+                legal_moves[i].to_col == tt_move.to_col &&
+                legal_moves[i].promotion == tt_move.promotion) {
+                // Swap TT move to front
+                std::swap(legal_moves[0], legal_moves[i]);
+                break;
+            }
+        }
+    }
+    
+    // Sort remaining moves (skip first if it's TT move) by MVV-LVA
+    auto sort_start = has_tt_move ? legal_moves.begin() + 1 : legal_moves.begin();
+    std::stable_sort(sort_start, legal_moves.end(), 
         [&board](const move& a, const move& b) {
-            // Sort in descending order (highest score first)
-            // Moves with higher scores will be searched first
             return calculate_move_score(board, a) > calculate_move_score(board, b);
         });
 
     int best_score = NEG_INF;
+    move best_move = legal_moves.front();  // Track best move for TT storage
 
     // Search all moves
     for (const auto& candidate : legal_moves) {
@@ -480,9 +549,10 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         }
 #endif
 
-        // Update best score
+        // Update best score and best move
         if (score > best_score) {
             best_score = score;
+            best_move = candidate;
         }
 
         // Update alpha
@@ -494,6 +564,26 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         if (alpha >= beta) {
             break;
         }
+    }
+
+    // =========================================================================
+    // TRANSPOSITION TABLE STORE
+    // =========================================================================
+    // Store the result for future lookups (if search wasn't aborted)
+    if (!g_search_aborted) {
+        TTflag flag;
+        if (best_score <= original_alpha) {
+            // Failed low - this is an upper bound (we didn't find anything better)
+            flag = TT_UPPER;
+        } else if (best_score >= beta) {
+            // Failed high - this is a lower bound (real score is at least this good)
+            flag = TT_LOWER;
+        } else {
+            // Score is within window - this is the exact score
+            flag = TT_EXACT;
+        }
+        
+        g_tt.store(pos_hash, depth, best_score, flag, &best_move);
     }
 
     return best_score;

@@ -5,7 +5,7 @@ In this file we will setup the transposition table
 */
 
 #pragma once
-#include <cstint>
+#include <cstdint>
 #include <vector>
 #include "move.h"
 
@@ -37,18 +37,16 @@ class TranspositionTable
         resize_mb(mb);
     }
 
-    //resizes table to the specified megabytes
+    //resizes table to the specified megabytes (must be power of 2 for fast masking)
     void resize_mb(std::size_t mb)
     {
         std::size_t bytes = mb * 1024ULL * 1024ULL; //converts megabytes to bytes
         std::size_t n = bytes / sizeof(TTentry); 
         if (n < 1) n = 1; //at least one entry
-        table.assign(n , TTentry{});
-        mask = n -1; //mask matches size of table
 
-
+        // Round up to power of 2 for fast modulo via bitmask
         std::size_t pow2 = 1;
-        while (pow2 < n) pow2 <<=1;
+        while (pow2 < n) pow2 <<= 1;
         table.assign(pow2, TTentry{});
         mask = pow2 - 1;
     }
@@ -61,7 +59,7 @@ class TranspositionTable
 
     TTentry* probe(std::uint64_t key)
     {
-        TTentry& e = table[ley & mask];
+        TTentry& e = table[key & mask];
         if (e.key == key) return &e;
         return nullptr;
     }
