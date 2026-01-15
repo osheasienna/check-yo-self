@@ -1,4 +1,5 @@
 #include "board.h"
+#include "zobrist_h.h"
 
 // Builds the standard chess starting position.
 Board make_starting_position() {
@@ -34,6 +35,8 @@ Board make_starting_position() {
     board.white_can_castle_queenside = true;
     board.black_can_castle_kingside = true;
     board.black_can_castle_queenside = true;
+
+    board.zobrist_hash = compute_zobrist(board); //compute hasing for starting position
     
     return board;
 }

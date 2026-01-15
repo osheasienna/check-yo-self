@@ -29,8 +29,8 @@ std::uint64_t Z_ENPASSANT[8];
 static std::uint64_t splitmix64(std::uint64_t& x)
 {
     std::uint64_t z = (x += 0x9e3779b97f4a7c15ULL); //the big numbers here are from a classical example of the splitmix464 found online, they are know to work well
-    z = (z ^ (z >> 30) * 0xbf58476d1ce4e5b9ULL);
-    z = (z ^ (z >> 27) * 0x94d049bb133111eULL);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
 
     return z ^ (z >> 31);
 

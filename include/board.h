@@ -4,6 +4,7 @@
 #include <array>
 #include <vector>
 #include "move.h"
+#include <cstdint>
 
 constexpr int BOARD_SIZE = 8;
 
@@ -55,6 +56,8 @@ struct Board {
     // If en_passant_row == -1, no en passant capture is available.
     int en_passant_row = -1;
     int en_passant_col = -1;
+
+    std::uint64_t zobrist_hash = 0;
 };
 
 /* The undo structure stores what is necessary to restore the board so we don't have to make copies
@@ -83,6 +86,8 @@ struct Undo
     // True iff the move being undone was an en passant capture.
     // Needed because the captured pawn is not on the destination square.
     bool was_en_passant = false;
+
+    std::uint64_t zobrist_hash=0;
 };
 
 Board make_starting_position();

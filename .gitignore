@@ -8,3 +8,4 @@ chess-king
 uci_wrapper.py
 tests/
 
+.DS_Store
