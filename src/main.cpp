@@ -83,7 +83,7 @@ namespace {
                 case 'q': promotion = QUEEN; break;
                 case 'r': promotion = ROOK; break;
                 case 'b': promotion = BISHOP; break;
-                case 'n': promotion = KNIGHT; break;
+                case 'k': promotion = KNIGHT; break;
             }
         }
         

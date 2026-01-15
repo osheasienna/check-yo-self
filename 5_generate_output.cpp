@@ -34,7 +34,7 @@ std::string move_to_uci(move m) {
             case QUEEN:  uci += 'q'; break;
             case ROOK:   uci += 'r'; break;
             case BISHOP: uci += 'b'; break;
-            case KNIGHT: uci += 'n'; break; // Standard UCI format: 'n' for knight
+            case KNIGHT: uci += 'k'; break; // Project-specific: 'k' for knight (per prof's spec)
             default: return ""; // Unknown promotion code
         }
     }
