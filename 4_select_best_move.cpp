@@ -368,7 +368,16 @@ bool is_capture_move(const Board& board, const move& m) {
     }
 
     for (const move& m : moves) {
-        if (!is_capture_move(board, m)) continue;
+        bool dominated = !is_capture_move(board, m);
+        
+        // Also consider moves that give check (might be mate!)
+        if (dominated) {
+            Undo check_undo;
+            make_move(board, m, check_undo);
+            bool gives_check = is_in_check(board, board.side_to_move);
+            unmake_move(board, m, check_undo);
+            if (!gives_check) continue;  // Skip quiet non-checking moves
+        }
 
 #ifdef DEBUG_UNDO
         const Board before = board;
@@ -500,9 +509,20 @@ int negamax(Board& board, int depth, int alpha, int beta) {
 
     int best_score = NEG_INF;
     move best_move = legal_moves.front();  // Track best move for TT storage
+    
+    // Check if we're in check (don't apply LMR when evading check)
+    const bool in_check = is_in_check(board, board.side_to_move);
 
     // Search all moves
-    for (const auto& candidate : legal_moves) {
+    for (size_t move_index = 0; move_index < legal_moves.size(); ++move_index) {
+        const move& candidate = legal_moves[move_index];
+        
+        // LMR checks - must be done BEFORE make_move changes the board
+        bool is_capture = is_capture_move(board, candidate);
+        bool is_promotion = (candidate.promotion != NONE);
+        bool can_reduce = (move_index >= 4) && (depth >= 3) && 
+                          !is_capture && !is_promotion && !in_check;
+        
 #ifdef DEBUG_UNDO
         const Board before = board;
 #endif
@@ -520,24 +540,31 @@ int negamax(Board& board, int depth, int alpha, int beta) {
             // Position would appear 3+ times = forced draw
             // Return draw score (0) - neither good nor bad
             score = -DRAW_SCORE;  // Negated because we're in opponent's perspective
-        } else if (repetition_count == 1) {
-            // Position has been seen once before
-            // Discourage but don't force-avoid (might be acceptable in some cases)
-            // Still search but with a small penalty toward draw
+        } else {
+            // Late Move Reductions (LMR): Search late quiet moves at reduced depth first
+            
             add_position_to_history(pos_hash);
-            score = -negamax(board, depth - 1, -beta, -alpha);
+            
+            if (can_reduce) {
+                // LMR: Reduced depth search with null window
+                int reduction = 1 + (depth > 6 ? 1 : 0);  // Reduce by 1-2 plies
+                score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha);
+                
+                // If reduced search beats alpha, re-search at full depth
+                if (score > alpha) {
+                    score = -negamax(board, depth - 1, -beta, -alpha);
+                }
+            } else {
+                // Full depth search
+                score = -negamax(board, depth - 1, -beta, -alpha);
+            }
+            
             remove_last_position_from_history();
             
-            // Blend toward draw score slightly to discourage repetition
-            // This makes the engine prefer non-repeating moves when scores are close
-            if (score > DRAW_SCORE) {
-                score = score - 10;  // Small penalty for potential repetition
+            // Small penalty for moves that repeat once (discourage repetition)
+            if (repetition_count == 1 && score > DRAW_SCORE) {
+                score = score - 10;
             }
-        } else {
-            // New position, search normally
-            add_position_to_history(pos_hash);
-            score = -negamax(board, depth - 1, -beta, -alpha);
-            remove_last_position_from_history();
         }
 
         // Undo move to restore previous board state
@@ -589,18 +616,24 @@ int negamax(Board& board, int depth, int alpha, int beta) {
     return best_score;
 }
 
+// Result struct to return both move and score from search
+struct SearchResult {
+    move best_move;
+    int score;
+};
+
 // SELECT_MOVE FUNCTION
 // BOARD: current board position
 // DEPTH: number of moves to look ahead
-// returns the best move for the current player
-move select_move(const Board& board, int depth) {
+// returns the best move and score for the current player
+SearchResult select_move(const Board& board, int depth) {
     // generate all legal moves
     // legal moves is now a vector of all these moves
     std::vector<move> legal_moves = generate_legal_moves(board);
     // if there are no legal moves => game is over (checkmate or stalemate)
     // returns a dummy move
     if (legal_moves.empty()) {
-        return move(0, 0, 0, 0);
+        return {move(0, 0, 0, 0), 0};
     }
 
     // BUG FIX: Sort moves by MVV-LVA for better alpha-beta pruning efficiency
@@ -686,11 +719,16 @@ move select_move(const Board& board, int depth) {
         }
     }
 
-    // return the best move for the current player
-    return best_move;
+    // return the best move and score for the current player
+    return {best_move, best_score};
 }
 
 } // namespace
+
+// Mate detection threshold - scores near CHECKMATE_SCORE indicate forced mate
+constexpr int MATE_THRESHOLD = 90000;    // CHECKMATE_SCORE is 100000
+// Minimum advantage to consider "clearly winning" for early stop
+constexpr int CLEARLY_WINNING = 300;     // ~3 pawns or a piece up
 
 // FIND_BEST_MOVE FUNCTION WITH ITERATIVE DEEPENING AND TIME CONTROL
 // BOARD: current board position
@@ -714,8 +752,15 @@ move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
         return move(0, 0, 0, 0);  // No legal moves (checkmate/stalemate)
     }
     
+    // Get static evaluation to help decide early termination
+    // Positive = good for white, need to adjust for side to move
+    int static_eval = evaluate_board(board);
+    int eval_for_us = (board.side_to_move == Color::White) ? static_eval : -static_eval;
+    std::cerr << "Static eval for side to move: " << eval_for_us << "\n";
+    
     // Always have a fallback move (first legal move)
     move best_move = legal_moves.front();
+    int best_score = NEG_INF;
     
     // ITERATIVE DEEPENING: Start at depth 1, increase until time runs out or max depth reached
     // This ensures we always have a valid move to return
@@ -727,12 +772,28 @@ move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
         }
         
         // Search at current depth
-        move current_best = select_move(board, depth);
+        SearchResult result = select_move(board, depth);
         
         // Only update best move if search completed without timeout
         if (!g_search_aborted) {
-            best_move = current_best;
-            std::cerr << "Completed depth " << depth << "\n";
+            best_move = result.best_move;
+            best_score = result.score;
+            std::cerr << "Completed depth " << depth << " (score: " << best_score << ")\n";
+            
+            // EARLY TERMINATION: Stop if we found a forced mate
+            if (best_score >= MATE_THRESHOLD) {
+                std::cerr << "Found forced mate! Stopping search early.\n";
+                break;
+            }
+            
+            // EARLY TERMINATION: Stop if static eval shows we're winning
+            // AND search confirms it at depth 4+
+            // This saves time in clearly winning positions
+            if (depth >= 4 && eval_for_us >= CLEARLY_WINNING && best_score >= CLEARLY_WINNING) {
+                std::cerr << "Position is clearly winning (eval: " << eval_for_us 
+                          << ", search: " << best_score << "), stopping search.\n";
+                break;
+            }
         } else {
             std::cerr << "Search aborted at depth " << depth << "\n";
             break;  // Stop iterating if search was aborted

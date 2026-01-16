@@ -314,6 +314,28 @@ int evaluate_board(const Board& board) {
             score += DOUBLED_PAWN_PENALTY * (black_pawns_per_file[file] - 1);
         }
     }
+    
+    // Development penalty: penalize pieces still on starting squares
+    // This encourages the bot to develop knights and bishops early
+    // White pieces on back rank (row 0)
+    if (board.squares[0][1].type == PieceType::Knight && 
+        board.squares[0][1].color == Color::White) score -= 30;  // b1 knight
+    if (board.squares[0][6].type == PieceType::Knight && 
+        board.squares[0][6].color == Color::White) score -= 30;  // g1 knight
+    if (board.squares[0][2].type == PieceType::Bishop && 
+        board.squares[0][2].color == Color::White) score -= 25;  // c1 bishop
+    if (board.squares[0][5].type == PieceType::Bishop && 
+        board.squares[0][5].color == Color::White) score -= 25;  // f1 bishop
+    
+    // Black pieces on back rank (row 7) - add to score = penalty for black
+    if (board.squares[7][1].type == PieceType::Knight && 
+        board.squares[7][1].color == Color::Black) score += 30;  // b8 knight
+    if (board.squares[7][6].type == PieceType::Knight && 
+        board.squares[7][6].color == Color::Black) score += 30;  // g8 knight
+    if (board.squares[7][2].type == PieceType::Bishop && 
+        board.squares[7][2].color == Color::Black) score += 25;  // c8 bishop
+    if (board.squares[7][5].type == PieceType::Bishop && 
+        board.squares[7][5].color == Color::Black) score += 25;  // f8 bishop
 
     // simple check-related bonuses to encourage mating ideas
     Color opponent = (board.side_to_move == Color::White) ? Color::Black : Color::White;
