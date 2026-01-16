@@ -16,6 +16,7 @@ add_executable(chess-king
     5_generate_output.cpp
     zobrist_h.cpp
     attacks.cpp
+    openings.cpp
 )
 
 target_include_directories(chess-king
