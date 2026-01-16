@@ -500,9 +500,20 @@ int negamax(Board& board, int depth, int alpha, int beta) {
 
     int best_score = NEG_INF;
     move best_move = legal_moves.front();  // Track best move for TT storage
+    
+    // Check if we're in check (don't apply LMR when evading check)
+    const bool in_check = is_in_check(board, board.side_to_move);
 
     // Search all moves
-    for (const auto& candidate : legal_moves) {
+    for (size_t move_index = 0; move_index < legal_moves.size(); ++move_index) {
+        const move& candidate = legal_moves[move_index];
+        
+        // LMR checks - must be done BEFORE make_move changes the board
+        bool is_capture = is_capture_move(board, candidate);
+        bool is_promotion = (candidate.promotion != NONE);
+        bool can_reduce = (move_index >= 4) && (depth >= 3) && 
+                          !is_capture && !is_promotion && !in_check;
+        
 #ifdef DEBUG_UNDO
         const Board before = board;
 #endif
@@ -520,24 +531,31 @@ int negamax(Board& board, int depth, int alpha, int beta) {
             // Position would appear 3+ times = forced draw
             // Return draw score (0) - neither good nor bad
             score = -DRAW_SCORE;  // Negated because we're in opponent's perspective
-        } else if (repetition_count == 1) {
-            // Position has been seen once before
-            // Discourage but don't force-avoid (might be acceptable in some cases)
-            // Still search but with a small penalty toward draw
+        } else {
+            // Late Move Reductions (LMR): Search late quiet moves at reduced depth first
+            
             add_position_to_history(pos_hash);
-            score = -negamax(board, depth - 1, -beta, -alpha);
+            
+            if (can_reduce) {
+                // LMR: Reduced depth search with null window
+                int reduction = 1 + (depth > 6 ? 1 : 0);  // Reduce by 1-2 plies
+                score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha);
+                
+                // If reduced search beats alpha, re-search at full depth
+                if (score > alpha) {
+                    score = -negamax(board, depth - 1, -beta, -alpha);
+                }
+            } else {
+                // Full depth search
+                score = -negamax(board, depth - 1, -beta, -alpha);
+            }
+            
             remove_last_position_from_history();
             
-            // Blend toward draw score slightly to discourage repetition
-            // This makes the engine prefer non-repeating moves when scores are close
-            if (score > DRAW_SCORE) {
-                score = score - 10;  // Small penalty for potential repetition
+            // Small penalty for moves that repeat once (discourage repetition)
+            if (repetition_count == 1 && score > DRAW_SCORE) {
+                score = score - 10;
             }
-        } else {
-            // New position, search normally
-            add_position_to_history(pos_hash);
-            score = -negamax(board, depth - 1, -beta, -alpha);
-            remove_last_position_from_history();
         }
 
         // Undo move to restore previous board state
