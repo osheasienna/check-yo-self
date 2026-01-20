@@ -128,8 +128,8 @@ void generate_bishop_moves(const Board& board, int row, int col, std::vector<mov
 }
 
 void generate_rook_moves(const Board& board, int row, int col, std::vector<move>& moves) {
-    static const int directions[3][2] = {{1, 0}, {-1, 0}, {0, 1}};
-    generate_sliding_moves(board, row, col, directions, 3, moves);
+    static const int directions[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    generate_sliding_moves(board, row, col, directions, 4, moves);
 }
 
 void generate_queen_moves(const Board& board, int row, int col, std::vector<move>& moves) {

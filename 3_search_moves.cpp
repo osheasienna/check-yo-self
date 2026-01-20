@@ -1,5 +1,7 @@
 #include "board.h"
 #include <array>
+#include <algorithm>  // For std::max, std::abs
+#include <cstdlib>    // For std::abs (integer version)
 #include "attacks.h"
 
 // static evaluation for the chess engine
@@ -177,6 +179,392 @@ constexpr int DOUBLED_PAWN_PENALTY = 15;    // Pawns on same file are weaker
 constexpr int ROOK_OPEN_FILE_BONUS = 25;    // Rook on file with no pawns
 constexpr int ROOK_SEMI_OPEN_FILE_BONUS = 15; // Rook on file with only enemy pawns
 
+// ============================================================================
+// ENDGAME EVALUATION HELPERS
+// ============================================================================
+// In endgames, we need special evaluation terms to help the engine:
+// 1. Push the enemy king towards edges/corners for mating
+// 2. Bring our king closer to the enemy king
+// 3. Recognize simple mating patterns (KQ vs K, KR vs K)
+// ============================================================================
+
+// Manhattan distance between two squares
+int manhattan_distance(int row1, int col1, int row2, int col2) {
+    return std::abs(row1 - row2) + std::abs(col1 - col2);
+}
+
+// Chebyshev distance (king distance) - max of row/col difference
+int king_distance(int row1, int col1, int row2, int col2) {
+    return std::max(std::abs(row1 - row2), std::abs(col1 - col2));
+}
+
+// Distance from center (0-3, 0 = center, 3 = corner)
+int center_distance(int row, int col) {
+    int row_dist = std::max(3 - row, row - 4);  // Distance from center rows (3,4)
+    int col_dist = std::max(3 - col, col - 4);  // Distance from center cols (3,4)
+    return row_dist + col_dist;
+}
+
+// Find king position for a given color
+// Returns true if found, sets king_row and king_col
+bool find_king(const Board& board, Color color, int& king_row, int& king_col) {
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::King && p.color == color) {
+                king_row = row;
+                king_col = col;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Evaluate endgame-specific bonuses
+// Returns bonus from White's perspective (positive = good for white)
+int evaluate_endgame_bonus(const Board& board, bool is_endgame, int white_material, int black_material) {
+    if (!is_endgame) return 0;
+    
+    int bonus = 0;
+    
+    // Find both kings
+    int white_king_row = 0, white_king_col = 0;
+    int black_king_row = 0, black_king_col = 0;
+    
+    if (!find_king(board, Color::White, white_king_row, white_king_col)) return 0;
+    if (!find_king(board, Color::Black, black_king_row, black_king_col)) return 0;
+    
+    // Calculate material advantage (positive = white ahead)
+    int material_diff = white_material - black_material;
+    
+    // If we have material advantage, apply endgame bonuses
+    if (material_diff > 200) {  // White is winning
+        // Bonus for pushing black king to edge
+        int black_center_dist = center_distance(black_king_row, black_king_col);
+        bonus += black_center_dist * 10;  // Up to 60 centipawns
+        
+        // Bonus for king proximity (our king should approach theirs)
+        int kings_dist = king_distance(white_king_row, white_king_col, black_king_row, black_king_col);
+        bonus += (7 - kings_dist) * 5;  // Up to 35 centipawns for being close
+        
+        // Extra bonus if enemy king is in corner (easier to mate)
+        bool in_corner = (black_king_row == 0 || black_king_row == 7) && 
+                         (black_king_col == 0 || black_king_col == 7);
+        if (in_corner) bonus += 30;
+        
+    } else if (material_diff < -200) {  // Black is winning
+        // Bonus for pushing white king to edge
+        int white_center_dist = center_distance(white_king_row, white_king_col);
+        bonus -= white_center_dist * 10;
+        
+        // Bonus for king proximity
+        int kings_dist = king_distance(white_king_row, white_king_col, black_king_row, black_king_col);
+        bonus -= (7 - kings_dist) * 5;
+        
+        // Extra bonus if enemy king is in corner
+        bool in_corner = (white_king_row == 0 || white_king_row == 7) && 
+                         (white_king_col == 0 || white_king_col == 7);
+        if (in_corner) bonus -= 30;
+    }
+    
+    return bonus;
+}
+
+// ============================================================================
+// KING SAFETY EVALUATION
+// ============================================================================
+// Evaluates king safety based on:
+// 1. Pawn shield - pawns in front of the castled king
+// 2. Open files near king - dangerous for rook/queen attacks
+// 3. General exposure - king on center files is vulnerable in middlegame
+// Returns bonus from White's perspective (positive = good for white)
+// ============================================================================
+int evaluate_king_safety(const Board& board, bool is_endgame,
+                         const int* white_pawns_per_file, const int* black_pawns_per_file) {
+    // King safety matters less in endgames
+    if (is_endgame) return 0;
+    
+    int white_king_row = 0, white_king_col = 0;
+    int black_king_row = 0, black_king_col = 0;
+    
+    if (!find_king(board, Color::White, white_king_row, white_king_col)) return 0;
+    if (!find_king(board, Color::Black, black_king_row, black_king_col)) return 0;
+    
+    int white_safety = 0;
+    int black_safety = 0;
+    
+    // =========================================================================
+    // WHITE KING SAFETY
+    // =========================================================================
+    // Pawn shield bonus for castled king (king on g1/h1 or a1/b1/c1)
+    if (white_king_row == 0) {
+        // Kingside castled (king on f1, g1, or h1)
+        if (white_king_col >= 5) {
+            // Check pawns on f2, g2, h2 (row 1, cols 5,6,7)
+            for (int col = 5; col <= 7 && col < BOARD_SIZE; ++col) {
+                const Piece& p = board.squares[1][col];
+                if (p.type == PieceType::Pawn && p.color == Color::White) {
+                    white_safety += 10;  // Pawn on 2nd rank
+                } else if (col < BOARD_SIZE) {
+                    const Piece& p3 = board.squares[2][col];
+                    if (p3.type == PieceType::Pawn && p3.color == Color::White) {
+                        white_safety += 5;  // Pawn on 3rd rank (moved once)
+                    }
+                }
+            }
+        }
+        // Queenside castled (king on a1, b1, or c1)
+        else if (white_king_col <= 2) {
+            // Check pawns on a2, b2, c2 (row 1, cols 0,1,2)
+            for (int col = 0; col <= 2; ++col) {
+                const Piece& p = board.squares[1][col];
+                if (p.type == PieceType::Pawn && p.color == Color::White) {
+                    white_safety += 10;
+                } else {
+                    const Piece& p3 = board.squares[2][col];
+                    if (p3.type == PieceType::Pawn && p3.color == Color::White) {
+                        white_safety += 5;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Penalty for open files near white king
+    for (int col = std::max(0, white_king_col - 1); col <= std::min(7, white_king_col + 1); ++col) {
+        if (white_pawns_per_file[col] == 0 && black_pawns_per_file[col] == 0) {
+            white_safety -= 15;  // Open file near king
+        } else if (white_pawns_per_file[col] == 0) {
+            white_safety -= 10;  // Semi-open file (no friendly pawns)
+        }
+    }
+    
+    // Penalty for king on central files (d, e) in middlegame
+    if (white_king_col >= 3 && white_king_col <= 4 && white_king_row <= 1) {
+        white_safety -= 20;  // King hasn't castled, still in center
+    }
+    
+    // =========================================================================
+    // BLACK KING SAFETY (mirror of white)
+    // =========================================================================
+    if (black_king_row == 7) {
+        // Kingside castled (king on f8, g8, or h8)
+        if (black_king_col >= 5) {
+            for (int col = 5; col <= 7 && col < BOARD_SIZE; ++col) {
+                const Piece& p = board.squares[6][col];
+                if (p.type == PieceType::Pawn && p.color == Color::Black) {
+                    black_safety += 10;
+                } else if (col < BOARD_SIZE) {
+                    const Piece& p3 = board.squares[5][col];
+                    if (p3.type == PieceType::Pawn && p3.color == Color::Black) {
+                        black_safety += 5;
+                    }
+                }
+            }
+        }
+        // Queenside castled
+        else if (black_king_col <= 2) {
+            for (int col = 0; col <= 2; ++col) {
+                const Piece& p = board.squares[6][col];
+                if (p.type == PieceType::Pawn && p.color == Color::Black) {
+                    black_safety += 10;
+                } else {
+                    const Piece& p3 = board.squares[5][col];
+                    if (p3.type == PieceType::Pawn && p3.color == Color::Black) {
+                        black_safety += 5;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Penalty for open files near black king
+    for (int col = std::max(0, black_king_col - 1); col <= std::min(7, black_king_col + 1); ++col) {
+        if (white_pawns_per_file[col] == 0 && black_pawns_per_file[col] == 0) {
+            black_safety -= 15;
+        } else if (black_pawns_per_file[col] == 0) {
+            black_safety -= 10;
+        }
+    }
+    
+    // Penalty for king on central files
+    if (black_king_col >= 3 && black_king_col <= 4 && black_king_row >= 6) {
+        black_safety -= 20;
+    }
+    
+    // Return from white's perspective (positive = white safer)
+    return white_safety - black_safety;
+}
+
+// ============================================================================
+// PIECE ACTIVITY & ATTACK EVALUATION
+// ============================================================================
+// Evaluates how active the pieces are and if they're attacking the enemy king.
+// This encourages aggressive play and piece coordination.
+// ============================================================================
+int evaluate_piece_activity(const Board& board, bool is_endgame) {
+    int white_activity = 0;
+    int black_activity = 0;
+    
+    // Find both kings
+    int white_king_row = 0, white_king_col = 0;
+    int black_king_row = 0, black_king_col = 0;
+    find_king(board, Color::White, white_king_row, white_king_col);
+    find_king(board, Color::Black, black_king_row, black_king_col);
+    
+    // Count defenders near each king (for defensive evaluation)
+    int white_defenders = 0;  // White pieces near white king
+    int black_defenders = 0;  // Black pieces near black king
+    
+    // Evaluate each piece's activity
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::None || p.type == PieceType::Pawn || p.type == PieceType::King) {
+                continue;
+            }
+            
+            int enemy_king_row = (p.color == Color::White) ? black_king_row : white_king_row;
+            int enemy_king_col = (p.color == Color::White) ? black_king_col : white_king_col;
+            int own_king_row = (p.color == Color::White) ? white_king_row : black_king_row;
+            int own_king_col = (p.color == Color::White) ? white_king_col : black_king_col;
+            
+            // Distance to enemy king (closer = more dangerous)
+            int dist_to_enemy_king = king_distance(row, col, enemy_king_row, enemy_king_col);
+            // Distance to own king (closer = defending)
+            int dist_to_own_king = king_distance(row, col, own_king_row, own_king_col);
+            
+            // Bonus for pieces close to enemy king (attacking potential)
+            int attack_bonus = 0;
+            if (!is_endgame) {
+                // In middlegame, reward pieces near enemy king
+                if (dist_to_enemy_king <= 2) {
+                    attack_bonus = 20;  // Very close - dangerous!
+                } else if (dist_to_enemy_king <= 3) {
+                    attack_bonus = 10;  // Moderately close
+                } else if (dist_to_enemy_king <= 4) {
+                    attack_bonus = 5;   // Within striking range
+                }
+                
+                // Extra bonus for queens and rooks near enemy king
+                if (p.type == PieceType::Queen && dist_to_enemy_king <= 3) {
+                    attack_bonus += 15;
+                }
+                if (p.type == PieceType::Rook && dist_to_enemy_king <= 2) {
+                    attack_bonus += 10;
+                }
+            }
+            
+            // DEFENSE BONUS: Pieces close to own king help defend
+            int defense_bonus = 0;
+            if (!is_endgame && dist_to_own_king <= 2) {
+                // Knights and bishops are good defenders
+                if (p.type == PieceType::Knight || p.type == PieceType::Bishop) {
+                    defense_bonus = 15;
+                }
+                // Rooks nearby are excellent defenders
+                if (p.type == PieceType::Rook) {
+                    defense_bonus = 20;
+                }
+                // Queen near king is powerful defense
+                if (p.type == PieceType::Queen) {
+                    defense_bonus = 10;
+                }
+                
+                // Count defenders
+                if (p.color == Color::White) {
+                    white_defenders++;
+                } else {
+                    black_defenders++;
+                }
+            }
+            
+            // Centralization bonus (pieces in center are more active)
+            int center_bonus = 0;
+            int center_dist = center_distance(row, col);
+            if (center_dist <= 2) {
+                center_bonus = (4 - center_dist) * 3;  // Up to 12 for central squares
+            }
+            
+            // Add to appropriate color
+            if (p.color == Color::White) {
+                white_activity += attack_bonus + center_bonus + defense_bonus;
+            } else {
+                black_activity += attack_bonus + center_bonus + defense_bonus;
+            }
+        }
+    }
+    
+    // PENALTY for having very few defenders when not in endgame
+    // This encourages keeping pieces near the king for defense
+    if (!is_endgame) {
+        if (white_defenders == 0) {
+            white_activity -= 40;  // No defenders = dangerous!
+        } else if (white_defenders == 1) {
+            white_activity -= 15;  // Only one defender
+        }
+        
+        if (black_defenders == 0) {
+            black_activity -= 40;
+        } else if (black_defenders == 1) {
+            black_activity -= 15;
+        }
+    }
+    
+    return white_activity - black_activity;
+}
+
+// ============================================================================
+// MOBILITY EVALUATION (simplified - count piece mobility)
+// ============================================================================
+// Bonus for having more legal moves available. This encourages active play.
+// Note: This is expensive to compute, so we use a simplified version.
+// ============================================================================
+int evaluate_mobility_simple(const Board& board) {
+    // Count pieces that are "developed" (off back rank for minor pieces)
+    int white_developed = 0;
+    int black_developed = 0;
+    
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& p = board.squares[row][col];
+            if (p.type == PieceType::None) continue;
+            
+            // Knights and bishops off back rank = developed
+            if (p.type == PieceType::Knight || p.type == PieceType::Bishop) {
+                if (p.color == Color::White && row > 0) {
+                    white_developed += 10;
+                    if (row >= 2) white_developed += 5;  // Extra for being more advanced
+                } else if (p.color == Color::Black && row < 7) {
+                    black_developed += 10;
+                    if (row <= 5) black_developed += 5;
+                }
+            }
+            
+            // Rooks on 7th rank (2nd rank for black) = very active
+            if (p.type == PieceType::Rook) {
+                if (p.color == Color::White && row == 6) {
+                    white_developed += 20;  // Rook on 7th rank!
+                } else if (p.color == Color::Black && row == 1) {
+                    black_developed += 20;  // Rook on 2nd rank!
+                }
+            }
+            
+            // Queen off starting square = developed
+            if (p.type == PieceType::Queen) {
+                if (p.color == Color::White && !(row == 0 && col == 3)) {
+                    white_developed += 5;
+                } else if (p.color == Color::Black && !(row == 7 && col == 3)) {
+                    black_developed += 5;
+                }
+            }
+        }
+    }
+    
+    return white_developed - black_developed;
+}
+
 // EVALUATE_BOARD FUNCTION
 // BOARD: current board position
 // returns the score of the board
@@ -194,13 +582,25 @@ int evaluate_board(const Board& board) {
 
     // first pass: compute non-pawn material to decide phase + count pieces
     int non_pawn_material = 0;
+    int white_material = 0;  // Total white material (for endgame eval)
+    int black_material = 0;  // Total black material (for endgame eval)
+    
     for (int row = 0; row < BOARD_SIZE; ++row) {
         for (int col = 0; col < BOARD_SIZE; ++col) {
             const Piece& piece = board.squares[row][col];
             if (piece.type == PieceType::None) continue;
             
+            int piece_value = MATERIAL_VALUES[static_cast<int>(piece.type)];
+            
             if (piece.type != PieceType::Pawn) {
-                non_pawn_material += MATERIAL_VALUES[static_cast<int>(piece.type)];
+                non_pawn_material += piece_value;
+            }
+            
+            // Track material per side for endgame evaluation
+            if (piece.color == Color::White) {
+                white_material += piece_value;
+            } else {
+                black_material += piece_value;
             }
             
             // Count bishops for bishop pair bonus
@@ -260,16 +660,52 @@ int evaluate_board(const Board& board) {
 
                 if (is_passed) {
                     int rank = (piece.color == Color::White) ? row : (7 - row);
+                    // Significantly increased bonuses for passed pawns
+                    // A pawn close to promotion is almost worth a piece!
                     if (rank >= 7) {
-                        passed_bonus = 200;
+                        passed_bonus = 400;  // One square from promotion - very valuable!
                     } else if (rank >= 6) {
-                        passed_bonus = 100;
+                        passed_bonus = 200;  // Two squares from promotion
                     } else if (rank >= 5) {
-                        passed_bonus = 50;
+                        passed_bonus = 100;  // Getting dangerous
                     } else if (rank >= 4) {
-                        passed_bonus = 30;
+                        passed_bonus = 50;   // Past the middle
                     } else if (rank >= 3) {
-                        passed_bonus = 20;
+                        passed_bonus = 30;   // Starting to advance
+                    }
+                    
+                    // BONUS: Path to promotion is clear (no pieces blocking)
+                    bool path_clear = true;
+                    for (int check_row = row + pawn_dir;
+                         (piece.color == Color::White) ? check_row < BOARD_SIZE : check_row >= 0;
+                         check_row += pawn_dir) {
+                        if (board.squares[check_row][col].type != PieceType::None) {
+                            path_clear = false;
+                            break;
+                        }
+                    }
+                    if (path_clear) {
+                        passed_bonus += 50;  // Nothing blocking the pawn's path!
+                    }
+                    
+                    // BONUS: Passed pawn is protected by another pawn
+                    bool is_protected = false;
+                    // Check for defending pawns diagonally behind
+                    int behind_row = row - pawn_dir;
+                    if (behind_row >= 0 && behind_row < BOARD_SIZE) {
+                        for (int dc = -1; dc <= 1; dc += 2) {
+                            int protect_col = col + dc;
+                            if (protect_col >= 0 && protect_col < BOARD_SIZE) {
+                                const Piece& protector = board.squares[behind_row][protect_col];
+                                if (protector.type == PieceType::Pawn && protector.color == piece.color) {
+                                    is_protected = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (is_protected) {
+                        passed_bonus += 30;  // Protected passed pawn!
                     }
                 }
             }
@@ -315,6 +751,99 @@ int evaluate_board(const Board& board) {
         }
     }
     
+    // =========================================================================
+    // CONNECTED ROOKS AND BATTERIES
+    // =========================================================================
+    // Connected rooks (same rank or file with no pieces between) are powerful
+    // Queen-Rook batteries (aligned on same file/rank) are also very strong
+    // =========================================================================
+    
+    // Find rooks and queens for both sides
+    struct PiecePos { int row, col; };
+    std::vector<PiecePos> white_rooks, black_rooks;
+    PiecePos white_queen = {-1, -1}, black_queen = {-1, -1};
+    
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::Rook) {
+                if (p.color == Color::White) {
+                    white_rooks.push_back({r, c});
+                } else {
+                    black_rooks.push_back({r, c});
+                }
+            } else if (p.type == PieceType::Queen) {
+                if (p.color == Color::White) {
+                    white_queen = {r, c};
+                } else {
+                    black_queen = {r, c};
+                }
+            }
+        }
+    }
+    
+    // Helper lambda to check if two pieces are connected (same row or col, no blockers)
+    auto are_connected = [&](int r1, int c1, int r2, int c2) -> bool {
+        if (r1 == r2) {
+            // Same row - check columns between them
+            int start = std::min(c1, c2) + 1;
+            int end = std::max(c1, c2);
+            for (int c = start; c < end; ++c) {
+                if (board.squares[r1][c].type != PieceType::None) {
+                    return false;
+                }
+            }
+            return true;
+        } else if (c1 == c2) {
+            // Same column - check rows between them
+            int start = std::min(r1, r2) + 1;
+            int end = std::max(r1, r2);
+            for (int r = start; r < end; ++r) {
+                if (board.squares[r][c1].type != PieceType::None) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    };
+    
+    // White connected rooks
+    if (white_rooks.size() >= 2) {
+        if (are_connected(white_rooks[0].row, white_rooks[0].col, 
+                         white_rooks[1].row, white_rooks[1].col)) {
+            score += 25;  // Connected rooks bonus
+        }
+    }
+    
+    // Black connected rooks
+    if (black_rooks.size() >= 2) {
+        if (are_connected(black_rooks[0].row, black_rooks[0].col, 
+                         black_rooks[1].row, black_rooks[1].col)) {
+            score -= 25;  // Connected rooks bonus for black
+        }
+    }
+    
+    // White Queen-Rook battery
+    if (white_queen.row >= 0) {
+        for (const auto& rook : white_rooks) {
+            if (are_connected(white_queen.row, white_queen.col, rook.row, rook.col)) {
+                score += 30;  // Queen-Rook battery
+                break;  // Only count one battery
+            }
+        }
+    }
+    
+    // Black Queen-Rook battery
+    if (black_queen.row >= 0) {
+        for (const auto& rook : black_rooks) {
+            if (are_connected(black_queen.row, black_queen.col, rook.row, rook.col)) {
+                score -= 30;  // Queen-Rook battery for black
+                break;
+            }
+        }
+    }
+    
     // Development penalty: penalize pieces still on starting squares
     // This encourages the bot to develop knights and bishops early
     // White pieces on back rank (row 0)
@@ -345,6 +874,21 @@ int evaluate_board(const Board& board) {
     if (is_in_check(board, board.side_to_move)) {
         score += (board.side_to_move == Color::White) ? -20 : 20;
     }
+
+    // ENDGAME BONUS: King proximity, edge pushing, mating patterns
+    // This helps the engine convert winning endgames
+    score += evaluate_endgame_bonus(board, is_endgame, white_material, black_material);
+
+    // KING SAFETY: Pawn shield, open files, center exposure
+    // This helps the engine protect its king in the middlegame
+    score += evaluate_king_safety(board, is_endgame, white_pawns_per_file, black_pawns_per_file);
+
+    // PIECE ACTIVITY: Reward pieces attacking enemy king and controlling center
+    // This encourages aggressive, coordinated play
+    score += evaluate_piece_activity(board, is_endgame);
+    
+    // MOBILITY: Reward developed pieces and active positions
+    score += evaluate_mobility_simple(board);
 
     // return the final evaluation of the board
     return score;

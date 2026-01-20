@@ -129,6 +129,135 @@ constexpr int POS_INF = 1000000; // positive infinity
 constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
 constexpr int DRAW_SCORE = 0;    // Score for draw by repetition
 
+// ============================================================================
+// NULL MOVE PRUNING CONSTANTS
+// ============================================================================
+// Null move pruning: If we can "pass" and still have a good position, cut off.
+// This dramatically reduces the search tree size.
+// ============================================================================
+constexpr int NULL_MOVE_REDUCTION = 3;  // Reduce depth by 3 for null move search
+constexpr int NULL_MOVE_MIN_DEPTH = 3;  // Only apply null move at depth >= 3
+
+// ============================================================================
+// KILLER MOVES - Quiet moves that caused cutoffs at each depth
+// ============================================================================
+// Killer move heuristic: Remember quiet (non-capture) moves that caused
+// beta cutoffs. These moves are likely good in sibling positions at the
+// same depth, so we try them early in move ordering.
+// 
+// We store 2 killers per depth (slots 0 and 1). When we find a new killer,
+// we shift the old killer[0] to killer[1] and store the new one in killer[0].
+// ============================================================================
+constexpr int MAX_KILLER_DEPTH = 64;
+static move g_killers[MAX_KILLER_DEPTH][2];  // 2 killer moves per depth
+
+// Initialize killer move table (call at start of search)
+void clear_killers() {
+    for (int d = 0; d < MAX_KILLER_DEPTH; ++d) {
+        g_killers[d][0] = move(0, 0, 0, 0);
+        g_killers[d][1] = move(0, 0, 0, 0);
+    }
+}
+
+// Store a killer move at the given depth
+void store_killer(int depth, const move& m) {
+    if (depth < 0 || depth >= MAX_KILLER_DEPTH) return;
+    
+    // Don't store if it's already killer[0]
+    if (g_killers[depth][0].from_row == m.from_row &&
+        g_killers[depth][0].from_col == m.from_col &&
+        g_killers[depth][0].to_row == m.to_row &&
+        g_killers[depth][0].to_col == m.to_col) {
+        return;
+    }
+    
+    // Shift killer[0] to killer[1], store new killer in [0]
+    g_killers[depth][1] = g_killers[depth][0];
+    g_killers[depth][0] = m;
+}
+
+// Check if a move is a killer at the given depth
+bool is_killer(int depth, const move& m) {
+    if (depth < 0 || depth >= MAX_KILLER_DEPTH) return false;
+    
+    for (int i = 0; i < 2; ++i) {
+        if (g_killers[depth][i].from_row == m.from_row &&
+            g_killers[depth][i].from_col == m.from_col &&
+            g_killers[depth][i].to_row == m.to_row &&
+            g_killers[depth][i].to_col == m.to_col) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ============================================================================
+// HISTORY HEURISTIC - Track quiet moves that caused cutoffs historically
+// ============================================================================
+// The history heuristic keeps track of which quiet moves have been good in the
+// past. When a quiet move causes a beta cutoff, we increase its history score.
+// This helps order quiet moves better, putting historically good moves first.
+//
+// Array: g_history[color][from_square][to_square]
+// - color: 0 = White, 1 = Black
+// - from_square: 0-63 (row * 8 + col)
+// - to_square: 0-63 (row * 8 + col)
+// ============================================================================
+static int g_history[2][64][64];  // History scores for quiet moves
+
+// Clear history table (call at start of search)
+void clear_history() {
+    for (int c = 0; c < 2; ++c) {
+        for (int from = 0; from < 64; ++from) {
+            for (int to = 0; to < 64; ++to) {
+                g_history[c][from][to] = 0;
+            }
+        }
+    }
+}
+
+// Update history score for a move that caused a cutoff
+// Bonus is depth * depth to favor deeper cutoffs
+void update_history(Color side, const move& m, int depth) {
+    int color_idx = (side == Color::White) ? 0 : 1;
+    int from_sq = m.from_row * 8 + m.from_col;
+    int to_sq = m.to_row * 8 + m.to_col;
+    
+    // Add depth^2 bonus (deeper cutoffs are more valuable)
+    g_history[color_idx][from_sq][to_sq] += depth * depth;
+    
+    // Cap history values to prevent overflow and keep values reasonable
+    if (g_history[color_idx][from_sq][to_sq] > 10000) {
+        g_history[color_idx][from_sq][to_sq] = 10000;
+    }
+}
+
+// Get history score for a move
+int get_history_score(Color side, const move& m) {
+    int color_idx = (side == Color::White) ? 0 : 1;
+    int from_sq = m.from_row * 8 + m.from_col;
+    int to_sq = m.to_row * 8 + m.to_col;
+    return g_history[color_idx][from_sq][to_sq];
+}
+
+// Check if position has enough material to avoid zugzwang
+// Zugzwang = position where any move worsens the position
+// Common in endgames with only pawns, so we require at least one non-pawn piece
+bool has_non_pawn_material(const Board& board, Color side) {
+    for (int row = 0; row < BOARD_SIZE; ++row) {
+        for (int col = 0; col < BOARD_SIZE; ++col) {
+            const Piece& p = board.squares[row][col];
+            if (p.color == side && 
+                p.type != PieceType::None && 
+                p.type != PieceType::Pawn && 
+                p.type != PieceType::King) {
+                return true;  // Has knight, bishop, rook, or queen
+            }
+        }
+    }
+    return false;
+}
+
 // DEBUG: verify make_move/unmake_move restore the board perfectly.
 // Enable by compiling with -DDEBUG_UNDO
 static bool boards_equal(const Board& a, const Board& b) {
@@ -220,14 +349,21 @@ bool is_capture_move(const Board& board, const move& m) {
  * Assigns a score to a move for move ordering using MVV-LVA heuristic.
  * Higher scores = better moves (will be searched first).
  * 
+ * Move ordering priority:
+ * 1. TT move (handled separately)
+ * 2. Captures ordered by MVV-LVA (Most Valuable Victim - Least Valuable Aggressor)
+ * 3. Killer moves (quiet moves that caused cutoffs at this depth)
+ * 4. Other quiet moves
+ * 
  * MVV-LVA: Most Valuable Victim - Least Valuable Aggressor
  * - Captures: 10 * value_of_victim - value_of_attacker
  *   Example: PxQ (Pawn takes Queen) = 10*900 - 100 = 8900
  *   Example: RxN (Rook takes Knight) = 10*320 - 500 = 2700
- * - Promotions: High score (+900)
- * - Quiet moves: 0
+ * - Promotions: High score (+1000)
+ * - Killer moves: Medium score (+800)
+ * - Quiet moves: 0 or small positional bonus
  */
- int calculate_move_score(const Board& board, const move& m) {
+ int calculate_move_score(const Board& board, const move& m, int depth = 0) {
     // Check if this is a promotion move
     // Promotions are very valuable, give them high priority
     if (m.promotion != NONE) {
@@ -290,7 +426,21 @@ bool is_capture_move(const Board& board, const move& m) {
         }
     }
 
-    // Quiet move (no capture, no promotion)
+    // KILLER MOVE BONUS: Quiet moves that caused cutoffs at this depth
+    // Give them high priority (after captures but before other quiet moves)
+    if (is_killer(depth, m)) {
+        return 800;  // High score for killer moves
+    }
+
+    // HISTORY HEURISTIC: Use historical success of quiet moves
+    // Moves that caused cutoffs in the past are likely good here too
+    int history_score = get_history_score(board.side_to_move, m);
+    if (history_score > 0) {
+        // Scale history to be between 0 and 700 (below killer moves)
+        return std::min(700, history_score / 15);
+    }
+
+    // Quiet move (no capture, no promotion, not a killer, no history)
     return 0;
 }
 
@@ -472,6 +622,42 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         has_tt_move = true;
     }
 
+    // =========================================================================
+    // NULL MOVE PRUNING
+    // =========================================================================
+    // If we're not in check and have enough material, try "passing" our turn.
+    // If opponent can't beat beta even with a free move, we can cut off.
+    // This gives ~2 plies of extra effective depth.
+    // =========================================================================
+    const bool in_check_before_moves = is_in_check(board, board.side_to_move);
+    
+    // Only apply null move at sufficient depth (need depth > reduction + 1)
+    // Also avoid null move when we might be in zugzwang (low material)
+    if (!in_check_before_moves && 
+        depth >= NULL_MOVE_MIN_DEPTH + NULL_MOVE_REDUCTION &&  // Ensure positive search depth
+        beta < POS_INF - 1000 &&  // Not searching for mate
+        beta > NEG_INF + 1000 &&  // Not in a losing position
+        has_non_pawn_material(board, board.side_to_move)) {
+        
+        // Make null move: just switch sides without moving
+        Board null_board = board;
+        null_board.side_to_move = (board.side_to_move == Color::White) ? Color::Black : Color::White;
+        null_board.en_passant_row = -1;  // Clear en passant after null move
+        null_board.en_passant_col = -1;
+        
+        // Search with reduced depth and null window
+        int null_depth = depth - 1 - NULL_MOVE_REDUCTION;
+        if (null_depth > 0) {  // Extra safety check
+            int null_score = -negamax(null_board, null_depth, -beta, -beta + 1);
+            
+            // If null move search fails high (score >= beta), we can cut off
+            // The idea: if we can pass and still be >= beta, actually moving will be even better
+            if (null_score >= beta && !g_search_aborted) {
+                return beta;  // Trust the null move result
+            }
+        }
+    }
+
     // Generate all legal moves
     std::vector<move> legal_moves = generate_legal_moves(board);
 
@@ -500,18 +686,18 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         }
     }
     
-    // Sort remaining moves (skip first if it's TT move) by MVV-LVA
+    // Sort remaining moves (skip first if it's TT move) by MVV-LVA + killers
     auto sort_start = has_tt_move ? legal_moves.begin() + 1 : legal_moves.begin();
     std::stable_sort(sort_start, legal_moves.end(), 
-        [&board](const move& a, const move& b) {
-            return calculate_move_score(board, a) > calculate_move_score(board, b);
+        [&board, depth](const move& a, const move& b) {
+            return calculate_move_score(board, a, depth) > calculate_move_score(board, b, depth);
         });
 
     int best_score = NEG_INF;
     move best_move = legal_moves.front();  // Track best move for TT storage
     
-    // Check if we're in check (don't apply LMR when evading check)
-    const bool in_check = is_in_check(board, board.side_to_move);
+    // Use the check status we already computed for null move pruning
+    const bool in_check = in_check_before_moves;
 
     // Search all moves
     for (size_t move_index = 0; move_index < legal_moves.size(); ++move_index) {
@@ -561,9 +747,15 @@ int negamax(Board& board, int depth, int alpha, int beta) {
             
             remove_last_position_from_history();
             
-            // Small penalty for moves that repeat once (discourage repetition)
+            // Penalty for moves that repeat once (discourage repetition)
+            // Stronger penalty when we have an advantage - don't give up a winning position!
             if (repetition_count == 1 && score > DRAW_SCORE) {
-                score = score - 10;
+                // The bigger our advantage, the more we should avoid repetition
+                int penalty = 15;
+                if (score > 100) penalty = 30;      // We're up ~1 pawn
+                if (score > 200) penalty = 50;      // We're up ~2 pawns
+                if (score > 300) penalty = 80;      // We're clearly winning
+                score = score - penalty;
             }
         }
 
@@ -589,6 +781,13 @@ int negamax(Board& board, int depth, int alpha, int beta) {
 
         // Alpha-beta cutoff
         if (alpha >= beta) {
+            // KILLER MOVE: Store quiet moves that cause cutoffs
+            // These are likely good in sibling positions at the same depth
+            if (!is_capture && !is_promotion) {
+                store_killer(depth, candidate);
+                // HISTORY HEURISTIC: Update history for this quiet move
+                update_history(board.side_to_move, candidate, depth);
+            }
             break;
         }
     }
@@ -625,8 +824,9 @@ struct SearchResult {
 // SELECT_MOVE FUNCTION
 // BOARD: current board position
 // DEPTH: number of moves to look ahead
+// INIT_ALPHA, INIT_BETA: Optional bounds for aspiration windows (default: full window)
 // returns the best move and score for the current player
-SearchResult select_move(const Board& board, int depth) {
+SearchResult select_move(const Board& board, int depth, int init_alpha = NEG_INF, int init_beta = POS_INF) {
     // generate all legal moves
     // legal moves is now a vector of all these moves
     std::vector<move> legal_moves = generate_legal_moves(board);
@@ -636,25 +836,24 @@ SearchResult select_move(const Board& board, int depth) {
         return {move(0, 0, 0, 0), 0};
     }
 
-    // BUG FIX: Sort moves by MVV-LVA for better alpha-beta pruning efficiency
+    // BUG FIX: Sort moves by MVV-LVA + killers for better alpha-beta pruning efficiency
     // This was missing - without sorting, alpha-beta is much less effective
     // We use the same calculate_move_score() function that negamax() uses
-    // Good moves (captures, promotions) are tried first, leading to more cutoffs
+    // Good moves (captures, promotions, killers) are tried first, leading to more cutoffs
     std::stable_sort(legal_moves.begin(), legal_moves.end(), 
-        [&board](const move& a, const move& b) {
+        [&board, depth](const move& a, const move& b) {
             // Sort in descending order (highest score first)
             // Moves with higher scores will be searched first
-            return calculate_move_score(board, a) > calculate_move_score(board, b);
+            return calculate_move_score(board, a, depth) > calculate_move_score(board, b, depth);
         });
 
     // initialise best_move to the first move in the vector
     move best_move = legal_moves.front();
     // initialise best_score to the worst possible score
     int best_score = NEG_INF;
-    // initialise alpha worst possible scores
-    int alpha = NEG_INF;
-    // initialise beta to the best possible score (best score for the opponent)
-    int beta = POS_INF;
+    // Use provided alpha/beta for aspiration windows
+    int alpha = init_alpha;
+    int beta = init_beta;
 
     // loop through each legal move
     for (const auto& candidate : legal_moves) {
@@ -694,9 +893,13 @@ SearchResult select_move(const Board& board, int depth) {
             score = -negamax(temp, depth - 1, -beta, -alpha);
             remove_last_position_from_history();
             
-            // Small penalty for moves that repeat once (not fatal, but discouraged)
+            // Penalty for moves that repeat once - stronger when winning
             if (repetition_count == 1 && score > DRAW_SCORE) {
-                score = score - 15;  // Discourage repetition even if score is good
+                int penalty = 20;
+                if (score > 100) penalty = 40;
+                if (score > 200) penalty = 60;
+                if (score > 300) penalty = 100;  // Very strong - don't repeat when winning!
+                score = score - penalty;
             }
         }
 
@@ -741,6 +944,10 @@ move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
     // Initialize time control
     set_time_limit(time_limit_ms);
     
+    // Clear killer moves and history from previous search
+    clear_killers();
+    clear_history();
+    
     // CHECK if depth is valid
     if (max_depth < 1) {
         max_depth = 1;
@@ -762,8 +969,15 @@ move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
     move best_move = legal_moves.front();
     int best_score = NEG_INF;
     
-    // ITERATIVE DEEPENING: Start at depth 1, increase until time runs out or max depth reached
-    // This ensures we always have a valid move to return
+    // =========================================================================
+    // ITERATIVE DEEPENING WITH ASPIRATION WINDOWS
+    // =========================================================================
+    // After the first iteration, we use a narrow window around the previous
+    // score. If the search fails outside this window, we widen and re-search.
+    // This typically saves time because most searches stay within the window.
+    // =========================================================================
+    constexpr int ASPIRATION_DELTA = 50;  // Initial window size (+/- 50 centipawns)
+    
     for (int depth = 1; depth <= max_depth; ++depth) {
         // Check time before starting new depth
         if (time_is_up()) {
@@ -771,8 +985,32 @@ move find_best_move(const Board& board, int max_depth, int time_limit_ms) {
             break;
         }
         
-        // Search at current depth
-        SearchResult result = select_move(board, depth);
+        SearchResult result;
+        
+        // Use aspiration windows only after depth 4 with a valid previous score
+        // This provides speedup without the instability at low depths
+        bool use_aspiration = (depth >= 5 && 
+                               best_score > NEG_INF + 5000 && 
+                               best_score < POS_INF - 5000 &&
+                               std::abs(best_score) < MATE_THRESHOLD);
+        
+        if (!use_aspiration) {
+            result = select_move(board, depth);
+        } else {
+            // ASPIRATION WINDOWS: Start with narrow window around previous score
+            constexpr int ASPIRATION_DELTA = 50;
+            int delta = ASPIRATION_DELTA;
+            int asp_alpha = std::max(best_score - delta, NEG_INF);
+            int asp_beta = std::min(best_score + delta, POS_INF);
+            
+            result = select_move(board, depth, asp_alpha, asp_beta);
+            
+            // If search failed outside window and wasn't aborted, re-search with full window
+            if (!g_search_aborted && (result.score <= asp_alpha || result.score >= asp_beta)) {
+                std::cerr << "Aspiration re-search at depth " << depth << "\n";
+                result = select_move(board, depth);
+            }
+        }
         
         // Only update best move if search completed without timeout
         if (!g_search_aborted) {

@@ -49,24 +49,9 @@ bool is_attacked(const Board& board, int target_row, int target_col, Color by_co
         }
     }
 
-    // Straights (Rook)
-    int rook_dirs[3][2] = {{1, 0}, {-1, 0}, {0, 1}};
-    for (auto& dir : rook_dirs) {
-        for (int dist = 1; dist < BOARD_SIZE; ++dist) {
-            int r = target_row + dir[0] * dist;
-            int c = target_col + dir[1] * dist;
-            if (!is_valid_square(r, c)) break;
-            const Piece& p = board.squares[r][c];
-            if (p.type != PieceType::None) {
-                if (p.color == by_color && (p.type == PieceType::Rook)) return true;
-                break; // Blocked
-            }
-        }
-    }
-
-//queen attacks
-    int queen_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (auto& dir : queen_dirs) {
+    // Straights (Rook, Queen)
+    int straight_dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (auto& dir : straight_dirs) {
         for (int dist = 1; dist < BOARD_SIZE; ++dist) {
             int r = target_row + dir[0] * dist;
             int c = target_col + dir[1] * dist;
