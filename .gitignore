@@ -6,6 +6,7 @@ Makefile
 compile_commands.json
 chess-king
 uci_wrapper.py
+play_match.py
 tests/
 
 .DS_Store
