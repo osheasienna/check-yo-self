@@ -278,8 +278,109 @@ int evaluate_endgame_bonus(const Board& board, bool is_endgame, int white_materi
 // 1. Pawn shield - pawns in front of the castled king
 // 2. Open files near king - dangerous for rook/queen attacks
 // 3. General exposure - king on center files is vulnerable in middlegame
+// 4. Attack counting - squares around king under attack (NEW)
+// 5. King escape squares - how many safe squares the king can flee to (NEW)
+// 6. Attacker proximity - pieces near king zone by type (NEW)
 // Returns bonus from White's perspective (positive = good for white)
 // ============================================================================
+
+// King safety weights - tuned for aggressive play
+constexpr int PAWN_SHIELD_BONUS = 12;           // Per pawn on shield
+constexpr int PAWN_SHIELD_ADVANCED_BONUS = 6;   // Pawn moved one square
+constexpr int OPEN_FILE_PENALTY = 20;           // Open file near king
+constexpr int SEMI_OPEN_FILE_PENALTY = 12;      // Semi-open file near king
+constexpr int CENTER_KING_PENALTY = 25;         // King stuck in center
+constexpr int KING_ZONE_ATTACK_PENALTY = 8;     // Per attacked square in king zone
+constexpr int NO_ESCAPE_PENALTY = 30;           // King has no safe squares
+constexpr int FEW_ESCAPE_PENALTY = 15;          // King has only 1-2 safe squares
+
+// Attacker weights - how dangerous each piece type is near the king
+constexpr int QUEEN_ATTACK_WEIGHT = 5;
+constexpr int ROOK_ATTACK_WEIGHT = 3;
+constexpr int BISHOP_ATTACK_WEIGHT = 2;
+constexpr int KNIGHT_ATTACK_WEIGHT = 2;
+
+// Count attackers of each piece type near the king zone
+// Returns a danger score based on piece types attacking the king area
+int count_king_zone_attackers(const Board& board, int king_row, int king_col, Color enemy_color) {
+    int danger = 0;
+    
+    // King zone: 3x3 area around the king (or extended for more aggressive eval)
+    for (int dr = -1; dr <= 1; ++dr) {
+        for (int dc = -1; dc <= 1; ++dc) {
+            int r = king_row + dr;
+            int c = king_col + dc;
+            if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
+            
+            // Check if this square in the king zone is attacked
+            if (is_attacked(board, r, c, enemy_color)) {
+                danger += KING_ZONE_ATTACK_PENALTY;
+            }
+        }
+    }
+    
+    // Also check attackers in a wider ring (2 squares away) for major pieces
+    for (int dr = -2; dr <= 2; ++dr) {
+        for (int dc = -2; dc <= 2; ++dc) {
+            if (std::abs(dr) <= 1 && std::abs(dc) <= 1) continue; // Skip inner zone
+            int r = king_row + dr;
+            int c = king_col + dc;
+            if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
+            
+            const Piece& p = board.squares[r][c];
+            if (p.type == PieceType::None || p.color != enemy_color) continue;
+            
+            // Weight by piece type
+            switch (p.type) {
+                case PieceType::Queen:
+                    danger += QUEEN_ATTACK_WEIGHT;
+                    break;
+                case PieceType::Rook:
+                    danger += ROOK_ATTACK_WEIGHT;
+                    break;
+                case PieceType::Bishop:
+                    danger += BISHOP_ATTACK_WEIGHT;
+                    break;
+                case PieceType::Knight:
+                    danger += KNIGHT_ATTACK_WEIGHT;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    
+    return danger;
+}
+
+// Count how many safe squares the king can escape to
+int count_king_escape_squares(const Board& board, int king_row, int king_col, Color king_color) {
+    int safe_squares = 0;
+    Color enemy = (king_color == Color::White) ? Color::Black : Color::White;
+    
+    // Check all 8 adjacent squares
+    for (int dr = -1; dr <= 1; ++dr) {
+        for (int dc = -1; dc <= 1; ++dc) {
+            if (dr == 0 && dc == 0) continue; // Skip king's current square
+            
+            int r = king_row + dr;
+            int c = king_col + dc;
+            if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
+            
+            const Piece& p = board.squares[r][c];
+            
+            // Square must be empty or have an enemy piece (capturable)
+            // AND not be attacked by enemy
+            if ((p.type == PieceType::None || p.color == enemy) &&
+                !is_attacked(board, r, c, enemy)) {
+                safe_squares++;
+            }
+        }
+    }
+    
+    return safe_squares;
+}
+
 int evaluate_king_safety(const Board& board, bool is_endgame,
                          const int* white_pawns_per_file, const int* black_pawns_per_file) {
     // King safety matters less in endgames
@@ -305,26 +406,25 @@ int evaluate_king_safety(const Board& board, bool is_endgame,
             for (int col = 5; col <= 7 && col < BOARD_SIZE; ++col) {
                 const Piece& p = board.squares[1][col];
                 if (p.type == PieceType::Pawn && p.color == Color::White) {
-                    white_safety += 10;  // Pawn on 2nd rank
+                    white_safety += PAWN_SHIELD_BONUS;
                 } else if (col < BOARD_SIZE) {
                     const Piece& p3 = board.squares[2][col];
                     if (p3.type == PieceType::Pawn && p3.color == Color::White) {
-                        white_safety += 5;  // Pawn on 3rd rank (moved once)
+                        white_safety += PAWN_SHIELD_ADVANCED_BONUS;
                     }
                 }
             }
         }
         // Queenside castled (king on a1, b1, or c1)
         else if (white_king_col <= 2) {
-            // Check pawns on a2, b2, c2 (row 1, cols 0,1,2)
             for (int col = 0; col <= 2; ++col) {
                 const Piece& p = board.squares[1][col];
                 if (p.type == PieceType::Pawn && p.color == Color::White) {
-                    white_safety += 10;
+                    white_safety += PAWN_SHIELD_BONUS;
                 } else {
                     const Piece& p3 = board.squares[2][col];
                     if (p3.type == PieceType::Pawn && p3.color == Color::White) {
-                        white_safety += 5;
+                        white_safety += PAWN_SHIELD_ADVANCED_BONUS;
                     }
                 }
             }
@@ -334,15 +434,27 @@ int evaluate_king_safety(const Board& board, bool is_endgame,
     // Penalty for open files near white king
     for (int col = std::max(0, white_king_col - 1); col <= std::min(7, white_king_col + 1); ++col) {
         if (white_pawns_per_file[col] == 0 && black_pawns_per_file[col] == 0) {
-            white_safety -= 15;  // Open file near king
+            white_safety -= OPEN_FILE_PENALTY;
         } else if (white_pawns_per_file[col] == 0) {
-            white_safety -= 10;  // Semi-open file (no friendly pawns)
+            white_safety -= SEMI_OPEN_FILE_PENALTY;
         }
     }
     
     // Penalty for king on central files (d, e) in middlegame
     if (white_king_col >= 3 && white_king_col <= 4 && white_king_row <= 1) {
-        white_safety -= 20;  // King hasn't castled, still in center
+        white_safety -= CENTER_KING_PENALTY;
+    }
+    
+    // NEW: King zone attack counting
+    int white_danger = count_king_zone_attackers(board, white_king_row, white_king_col, Color::Black);
+    white_safety -= white_danger;
+    
+    // NEW: King escape squares
+    int white_escapes = count_king_escape_squares(board, white_king_row, white_king_col, Color::White);
+    if (white_escapes == 0) {
+        white_safety -= NO_ESCAPE_PENALTY;
+    } else if (white_escapes <= 2) {
+        white_safety -= FEW_ESCAPE_PENALTY;
     }
     
     // =========================================================================
@@ -354,11 +466,11 @@ int evaluate_king_safety(const Board& board, bool is_endgame,
             for (int col = 5; col <= 7 && col < BOARD_SIZE; ++col) {
                 const Piece& p = board.squares[6][col];
                 if (p.type == PieceType::Pawn && p.color == Color::Black) {
-                    black_safety += 10;
+                    black_safety += PAWN_SHIELD_BONUS;
                 } else if (col < BOARD_SIZE) {
                     const Piece& p3 = board.squares[5][col];
                     if (p3.type == PieceType::Pawn && p3.color == Color::Black) {
-                        black_safety += 5;
+                        black_safety += PAWN_SHIELD_ADVANCED_BONUS;
                     }
                 }
             }
@@ -368,11 +480,11 @@ int evaluate_king_safety(const Board& board, bool is_endgame,
             for (int col = 0; col <= 2; ++col) {
                 const Piece& p = board.squares[6][col];
                 if (p.type == PieceType::Pawn && p.color == Color::Black) {
-                    black_safety += 10;
+                    black_safety += PAWN_SHIELD_BONUS;
                 } else {
                     const Piece& p3 = board.squares[5][col];
                     if (p3.type == PieceType::Pawn && p3.color == Color::Black) {
-                        black_safety += 5;
+                        black_safety += PAWN_SHIELD_ADVANCED_BONUS;
                     }
                 }
             }
@@ -382,15 +494,27 @@ int evaluate_king_safety(const Board& board, bool is_endgame,
     // Penalty for open files near black king
     for (int col = std::max(0, black_king_col - 1); col <= std::min(7, black_king_col + 1); ++col) {
         if (white_pawns_per_file[col] == 0 && black_pawns_per_file[col] == 0) {
-            black_safety -= 15;
+            black_safety -= OPEN_FILE_PENALTY;
         } else if (black_pawns_per_file[col] == 0) {
-            black_safety -= 10;
+            black_safety -= SEMI_OPEN_FILE_PENALTY;
         }
     }
     
     // Penalty for king on central files
     if (black_king_col >= 3 && black_king_col <= 4 && black_king_row >= 6) {
-        black_safety -= 20;
+        black_safety -= CENTER_KING_PENALTY;
+    }
+    
+    // NEW: King zone attack counting
+    int black_danger = count_king_zone_attackers(board, black_king_row, black_king_col, Color::White);
+    black_safety -= black_danger;
+    
+    // NEW: King escape squares
+    int black_escapes = count_king_escape_squares(board, black_king_row, black_king_col, Color::Black);
+    if (black_escapes == 0) {
+        black_safety -= NO_ESCAPE_PENALTY;
+    } else if (black_escapes <= 2) {
+        black_safety -= FEW_ESCAPE_PENALTY;
     }
     
     // Return from white's perspective (positive = white safer)
