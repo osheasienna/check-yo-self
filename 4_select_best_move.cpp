@@ -130,6 +130,15 @@ constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
 constexpr int DRAW_SCORE = 0;    // Score for draw by repetition
 
 // ============================================================================
+// CONTEMPT FACTOR - Makes the engine avoid draws
+// ============================================================================
+// A positive contempt means "I think I'm stronger, so draws are bad for me"
+// This encourages the engine to keep playing rather than accept a draw.
+// Set to 0 for objective play, positive to avoid draws, negative to seek draws.
+// ============================================================================
+constexpr int CONTEMPT = 25;     // Treat draws as -25 centipawns (slight loss)
+
+// ============================================================================
 // NULL MOVE PRUNING CONSTANTS
 // ============================================================================
 // Null move pruning: If we can "pass" and still have a good position, cut off.
@@ -716,6 +725,15 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         Undo undo;
         make_move(board, candidate, undo);
 
+        // =====================================================================
+        // CHECK EXTENSION
+        // =====================================================================
+        // extending by 1 ply helps find these sequences that would otherwise
+        // be cut off by the horizon effect
+        // =====================================================================
+        bool gives_check = is_in_check(board, board.side_to_move);
+        int extension = gives_check ? 1 : 0;
+
         // REPETITION DETECTION: Check if this position has been seen before
         // Compute hash of the new position and check history
         std::uint64_t pos_hash = compute_zobrist(board);
@@ -724,37 +742,41 @@ int negamax(Board& board, int depth, int alpha, int beta) {
         int score;
         if (repetition_count >= 2) {
             // Position would appear 3+ times = forced draw
-            // Return draw score (0) - neither good nor bad
-            score = -DRAW_SCORE;  // Negated because we're in opponent's perspective
+            // Apply CONTEMPT: treat draws as slightly bad (we want to keep playing!)
+            score = -(DRAW_SCORE - CONTEMPT);  // With contempt, draws are negative
         } else {
             // Late Move Reductions (LMR): Search late quiet moves at reduced depth first
+            // Don't reduce if the move gives check
             
             add_position_to_history(pos_hash);
             
-            if (can_reduce) {
+            // Don't apply LMR to checking moves
+            bool can_reduce_this_move = can_reduce && !gives_check;
+            
+            if (can_reduce_this_move) {
                 // LMR: Reduced depth search with null window
                 int reduction = 1 + (depth > 6 ? 1 : 0);  // Reduce by 1-2 plies
-                score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha);
+                score = -negamax(board, depth - 1 - reduction + extension, -alpha - 1, -alpha);
                 
                 // If reduced search beats alpha, re-search at full depth
                 if (score > alpha) {
-                    score = -negamax(board, depth - 1, -beta, -alpha);
+                    score = -negamax(board, depth - 1 + extension, -beta, -alpha);
                 }
             } else {
-                // Full depth search
-                score = -negamax(board, depth - 1, -beta, -alpha);
+                // Full depth search (with extension if giving check)
+                score = -negamax(board, depth - 1 + extension, -beta, -alpha);
             }
             
             remove_last_position_from_history();
             
-            // Penalty for moves that repeat once (discourage repetition)
-            // Stronger penalty when we have an advantage - don't give up a winning position!
-            if (repetition_count == 1 && score > DRAW_SCORE) {
-                // The bigger our advantage, the more we should avoid repetition
-                int penalty = 15;
-                if (score > 100) penalty = 30;      // We're up ~1 pawn
-                if (score > 200) penalty = 50;      // We're up ~2 pawns
-                if (score > 300) penalty = 80;      // We're clearly winning
+            // STRONGER repetition penalty - avoid repeating when we have ANY advantage
+            // The bigger our advantage, the more we should avoid repetition
+            if (repetition_count == 1 && score > DRAW_SCORE - CONTEMPT) {
+                int penalty = 25;                   // Base penalty
+                if (score > 50) penalty = 50;       // We're slightly better
+                if (score > 100) penalty = 75;      // We're up ~1 pawn
+                if (score > 200) penalty = 100;     // We're up ~2 pawns
+                if (score > 300) penalty = 150;     // We're clearly winning
                 score = score - penalty;
             }
         }
@@ -881,9 +903,9 @@ SearchResult select_move(const Board& board, int depth, int init_alpha = NEG_INF
         int score;
         if (repetition_count >= 2) {
             // This move would cause threefold repetition = draw
-            // Give it a draw score (0) - only pick if no better move exists
-            score = -DRAW_SCORE;
-            std::cerr << "Note: Move leads to repetition, score=0\n";
+            // Apply CONTEMPT: treat draws as slightly bad (we want to keep playing!)
+            score = -(DRAW_SCORE - CONTEMPT);
+            std::cerr << "Note: Move leads to repetition, applying contempt\n";
         } else {
             // Track this position during search
             add_position_to_history(pos_hash);
@@ -893,12 +915,13 @@ SearchResult select_move(const Board& board, int depth, int init_alpha = NEG_INF
             score = -negamax(temp, depth - 1, -beta, -alpha);
             remove_last_position_from_history();
             
-            // Penalty for moves that repeat once - stronger when winning
-            if (repetition_count == 1 && score > DRAW_SCORE) {
-                int penalty = 20;
-                if (score > 100) penalty = 40;
-                if (score > 200) penalty = 60;
-                if (score > 300) penalty = 100;  // Very strong - don't repeat when winning!
+            // STRONGER repetition penalty - avoid repeating when we have ANY advantage
+            if (repetition_count == 1 && score > DRAW_SCORE - CONTEMPT) {
+                int penalty = 30;                   // Base penalty (stronger at root)
+                if (score > 50) penalty = 60;       // We're slightly better
+                if (score > 100) penalty = 90;      // We're up ~1 pawn
+                if (score > 200) penalty = 120;     // We're up ~2 pawns
+                if (score > 300) penalty = 200;     // We're clearly winning - NEVER repeat!
                 score = score - penalty;
             }
         }
