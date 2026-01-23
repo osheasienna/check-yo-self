@@ -237,7 +237,7 @@ int main(int argc, char* argv[]) {
     } else {
         // Not in book - search for best move using Negamax with time control
         constexpr int MAX_SEARCH_DEPTH = 20;  // Maximum depth to search
-        constexpr int TIME_LIMIT_MS = 8500;   // 8.5 second limit
+        constexpr int TIME_LIMIT_MS = 9300;   // 9.3 second limit
         best_move = find_best_move(board, MAX_SEARCH_DEPTH, TIME_LIMIT_MS);
     }
 

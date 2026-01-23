@@ -126,7 +126,7 @@ size_t get_position_history_size() {
 namespace {
 constexpr int NEG_INF = -1000000; // negative infinity
 constexpr int POS_INF = 1000000; // positive infinity
-constexpr int MAX_QS_DEPTH = 8;  // Limit quiescence to 8 plies of captures
+constexpr int MAX_QS_DEPTH = 10;  // Limit quiescence to 10 plies of captures
 constexpr int DRAW_SCORE = 0;    // Score for draw by repetition
 
 // ============================================================================
